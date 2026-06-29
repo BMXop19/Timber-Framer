@@ -1,0 +1,1968 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Timber·Framer — single-file structural lumber framing generator + cut list
+  ============================================================================
+  A browser tool (no build step, no server required) that lays out a structural
+  wood frame for a small structure and produces a buildable cut list / buy list.
+  Its emphasis is STRUCTURAL INTENT: arrange members so loads travel through wood
+  (bearing & diagonal bracing) rather than through fasteners loaded in shear.
+
+  A WALL + ROOF framer: branching stud-wall layouts (corners, T/+ junctions,
+  door/window openings with built-up or solid headers) plus GABLE and SHED /
+  mono-pitch roof framing (rafters, knee/gable walls, overhangs, subfascia),
+  all sharing one viewport, cut list and members[] pipeline.
+  (Earlier Structure & Shelving modes were removed — they move to a separate project.)
+
+  Units are INCHES throughout, using ACTUAL (dressed) lumber dimensions
+  (e.g. a "2x4" is 1.5" x 3.5"). State auto-saves to localStorage.
+
+  HOW TO RUN
+    Open this index.html directly in a modern browser (double-click / File>Open),
+    or serve the folder: `python -m http.server 8000` then visit localhost:8000.
+
+  DEPENDENCY
+    Three.js r128, loaded from a CDN (cdnjs) at runtime — see the <script src> tag
+    just before the main <script>. No npm install / bundler. If offline, swap that
+    tag for a local copy of three.min.js (r128).
+
+  License: TODO (choose before release, e.g. MIT) — no license is declared yet.
+
+  ----------------------------------------------------------------------------
+  ARCHITECTURE / TABLE OF CONTENTS (in source order)
+  ----------------------------------------------------------------------------
+    <style>  — CSS design tokens (:root vars) + layout (sidebar / viewport / cut
+               panel / tooltip / changelog modal).
+    <body>   — HTML: #side sidebar (controls per mode), #main viewport (canvas +
+               overlays), #cut cut-list panel, #changelog modal.
+    <script> (top-to-bottom):
+       1. Lumber data        — LUMBER (sizes), STOCK, KERF, COLORS, ROLE_LABEL.
+       2. State + persistence — P (the config), localStorage load, migrations
+                                (joinery, turn-based walls → branch tree, roof cfg).
+       3. Wall + roof builder — addCornerPost/addPartitionPost, buildWall()
+                                (two-pass: resolve tree, then frame each wall),
+                                openings, headers, and gable/shed roof framing;
+                                wallRationale().
+       4. Three.js pipeline   — materials, memberBasis/memberSubBoxes (notches),
+                                memMesh (member → mesh, EPS anti-z-fight),
+                                hardwareMesh, initThree/resize, orbit camera,
+                                render3D.
+       5. Picking             — pickMember/handlePick + tooltip (piece #) + weights.
+       6. Cut list / buy list — ftin, cutRows, packStock (bin-pack), renderCut.
+       7. Rationale           — wallRationale() (load-path prose).
+       8. regen()             — rebuild members[] + refresh everything.
+       9. UI wiring           — syncUI, input handlers, wall UI, ROOF helpers
+                                (wallFrames/wallsClosed), renderWalls/renderRoof.
+      10. Export              — cut list .txt / .csv.
+      11. Presets             — save/load/rename/import/export whole-P designs.
+      12. Changelog           — CHANGELOG data (= the version record) + modal.
+      13. Boot                — initThree → syncUI → renderWalls → regen → frame.
+
+  COORDINATE FRAME
+    • Wall (buildWall): each wall has a LOCAL frame O (origin) + D (travel dir,
+      along length) + T (thickness dir = D rotated +90°, "left of travel") + Y up.
+      Walls live in world X/Z; the first wall starts at the origin heading +X.
+
+  MEMBER SCHEMA (the single source of truth — 3D AND cut list derive from it):
+    members[] entries are { role, size, start:Vector3, end:Vector3,
+      wide:Vector3 (unit vector along the board's WIDTH; thickness dir = dir×wide),
+      len, notches:[], ...optional: wall, corner, xsec, sheet, kind/geo/xf }.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Timber Framer — structural lumber generator + cut list</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ===========================================================================
+   CSS — design tokens + layout. (Reminder: inside <style> only C-style block
+   comments are valid — never use // here.) :root holds the palette/typography as
+   custom properties so the whole UI re-themes from one place; the member COLORS
+   defined later in JS are kept in sync with the --post/--beam/… swatches by hand.
+   =========================================================================== */
+:root{
+  --bg:#14110d; --p1:#1b1712; --p2:#241e17; --line:#332a20;
+  --ink:#efe7da; --dim:#a6927a; --faint:#6e5d49;
+  --accent:#e0913a; --a2:#9c5f22; --good:#6cc08a; --warn:#e7c14f; --bad:#e07a5f;
+  --post:#d98b53; --beam:#5b97d6; --joist:#54c2a0; --shelf:#d9b25a; --cleat:#e0707a; --brace:#b083d8;
+  --mono:"IBM Plex Mono",monospace; --sans:"Archivo",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;overflow:hidden;}
+body{font-family:var(--mono);background:var(--bg);color:var(--ink);display:flex;}
+
+/* ── Sidebar ── */
+#side{width:320px;min-width:320px;height:100%;overflow-y:auto;background:var(--p1);border-right:1px solid var(--line);padding:14px 16px 40px;}
+#side h1{font-family:var(--sans);font-weight:800;font-size:17px;letter-spacing:.02em;}
+#side h1 .accent{color:var(--accent);}
+.tagline{font-size:10px;color:var(--faint);margin:2px 0 14px;line-height:1.5;}
+.sec{margin-bottom:16px;}
+.sec-hd{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);margin-bottom:8px;border-bottom:1px solid var(--line);padding-bottom:4px;}
+.row{display:flex;gap:8px;}
+.field{flex:1;margin-bottom:8px;}
+.field label{display:block;font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--dim);margin-bottom:3px;}
+input[type=number],select{width:100%;background:var(--p2);border:1px solid var(--line);color:var(--ink);
+  font-family:var(--mono);font-size:14px;padding:7px 8px;border-radius:6px;}
+input:focus,select:focus{outline:none;border-color:var(--accent);}
+.toggle{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink);padding:6px 0;cursor:pointer;user-select:none;}
+.toggle input{width:16px;height:16px;accent-color:var(--accent);}
+.sub{margin:6px 0 4px 24px;padding-left:8px;border-left:1px solid var(--line);}
+.seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;}
+.seg button{flex:1;background:var(--p2);border:none;color:var(--dim);font-family:var(--mono);font-size:11px;padding:6px 4px;cursor:pointer;}
+.seg button.on{background:var(--accent);color:#1a1206;font-weight:600;}
+.hint{font-size:10px;color:var(--faint);line-height:1.5;margin-top:4px;}
+
+/* ── Viewport ── */
+#main{flex:1;position:relative;min-width:0;background:linear-gradient(#1d2630,#11151b);}
+canvas{display:block;width:100%;height:100%;}
+.overlay{position:absolute;font-family:var(--mono);}
+#legend{top:12px;left:12px;background:rgba(20,17,13,.78);border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:11px;line-height:1.8;}
+#legend .sw{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:6px;vertical-align:-1px;}
+#toolbar{top:12px;right:12px;display:flex;gap:6px;}
+.tool{background:rgba(20,17,13,.82);border:1px solid var(--line);color:var(--ink);font-family:var(--mono);font-size:11px;padding:6px 10px;border-radius:6px;cursor:pointer;}
+.tool:hover{border-color:var(--accent);}
+.tool.on{background:var(--accent);color:#1a1206;}
+#hint{bottom:10px;left:12px;font-size:10px;color:var(--dim);pointer-events:none;}
+#tooltip{display:none;pointer-events:auto;min-width:160px;background:rgba(20,17,13,.96);border:1px solid var(--accent);
+  border-radius:8px;padding:10px 12px;font-size:12px;z-index:20;box-shadow:0 8px 24px rgba(0,0,0,.55);}
+#tooltip .tt-hd{display:flex;align-items:center;gap:7px;font-family:var(--sans);font-weight:700;color:var(--ink);margin-bottom:7px;}
+#tooltip .tt-sw{width:11px;height:11px;border-radius:2px;}
+#tooltip .tt-x{margin-left:auto;background:none;border:none;color:var(--faint);cursor:pointer;font-size:13px;line-height:1;padding:0 2px;}
+#tooltip .tt-x:hover{color:var(--bad);}
+#tooltip .tt-row{display:flex;justify-content:space-between;gap:18px;padding:2px 0;color:var(--dim);}
+#tooltip .tt-row b{color:var(--ink);}
+#tooltip .tt-btn{margin-top:9px;width:100%;background:var(--p2);border:1px solid var(--line);color:var(--ink);
+  border-radius:6px;padding:7px;font-family:var(--mono);font-size:11px;cursor:pointer;}
+#tooltip .tt-btn:hover{border-color:var(--accent);color:var(--accent);}
+
+/* ── Cut list panel ── */
+#cut{width:340px;min-width:280px;height:100%;overflow-y:auto;background:var(--p1);border-left:1px solid var(--line);padding:14px 16px 40px;}
+#cut h2{font-family:var(--sans);font-size:14px;font-weight:800;letter-spacing:.02em;margin-bottom:2px;}
+#rationale{font-size:11px;line-height:1.6;color:var(--dim);background:var(--p2);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:6px;padding:9px 11px;margin:10px 0 14px;}
+#rationale b{color:var(--ink);}
+table{width:100%;border-collapse:collapse;font-size:11.5px;}
+th{text-align:left;color:var(--faint);font-weight:500;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--line);padding:5px 4px;}
+td{padding:5px 4px;border-bottom:1px solid var(--line);}
+td .tag{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px;}
+.num{text-align:right;font-variant-numeric:tabular-nums;}
+.totline{display:flex;justify-content:space-between;font-size:11.5px;padding:4px 4px;color:var(--dim);}
+.totline b{color:var(--ink);}
+.buy{font-size:11.5px;margin-top:4px;}
+.buy .b{display:flex;justify-content:space-between;padding:3px 4px;border-bottom:1px dashed var(--line);}
+.btn{background:var(--accent);border:none;color:#1a1206;font-family:var(--mono);font-weight:600;font-size:12px;padding:8px 12px;border-radius:6px;cursor:pointer;width:100%;margin-top:10px;}
+.btn.ghost{background:var(--p2);color:var(--ink);border:1px solid var(--line);}
+.warnbox{background:rgba(224,122,95,.12);border:1px solid var(--bad);color:#f0b6a8;font-size:10.5px;border-radius:6px;padding:8px 10px;margin-top:10px;line-height:1.5;}
+.disclaim{font-size:9.5px;color:var(--faint);line-height:1.5;margin-top:14px;border-top:1px solid var(--line);padding-top:10px;}
+#cut.hidden{display:none;}
+.wallcard{background:var(--p2);border:1px solid var(--line);border-radius:6px;padding:8px 9px;margin-bottom:8px;}
+.wallcard-hd{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--accent);margin-bottom:6px;}
+.del{background:none;border:none;color:var(--bad);cursor:pointer;font-size:12px;line-height:1;}
+.openrow{display:flex;gap:3px;align-items:center;margin:4px 0;}
+.openrow select,.openrow input{font-size:11px;padding:3px;background:var(--p1);border:1px solid var(--line);color:var(--ink);border-radius:4px;}
+.miniband{display:flex;gap:5px;margin-top:5px;}
+.miniband .btn{padding:5px 6px;font-size:10px;margin-top:0;}
+#wSizeSeg,.w-corner{margin-top:0;}
+#presetSec .row{gap:6px;}
+#presetSec .row .btn{margin-top:0;flex:1;}
+#presetSec .btn.del-btn{flex:0 0 auto;width:auto;color:var(--bad);padding:8px 11px;}
+#presetNote{margin-top:8px;}
+#presetNote .mod{color:var(--warn);}
+</style>
+</head>
+<body>
+
+<!-- ============ SIDEBAR (#side): mode bar, presets, and one control panel per mode ============ -->
+<aside id="side">
+  <!-- Version badge: this static text is replaced at runtime by initChangelog()
+       with 'v'+APP_VERSION+' · EXPERIMENTAL'; clicking it opens the #changelog modal. -->
+  <h1>Timber<span class="accent">·</span>Framer <button id="verBadge" title="View changelog" style="font-family:var(--mono);font-size:10px;font-weight:600;color:#6cc08a;background:none;border:none;padding:0;letter-spacing:.5px;vertical-align:middle;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px;">v1.10 · STABLE</button></h1>
+  <div class="tagline">Lumber framing generator + shared cut list.</div>
+  <div class="tagline" style="color:#ff8a3d;opacity:.85;margin-top:2px;">⚠ Built with AI. Heuristic, not engineered — verify everything against local code and a qualified professional before building.</div>
+  <div class="sec" id="presetSec">
+    <div class="sec-hd">Presets</div>
+    <select id="presetLoad"></select>
+    <div class="row" style="margin-top:7px">
+      <button class="btn ghost" id="savePreset">Save</button>
+      <button class="btn ghost" id="renamePreset" title="Rename the loaded preset">Rename</button>
+      <button class="btn ghost del-btn" id="presetDelete" title="Delete the loaded/selected preset">✕</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button class="btn ghost" id="exportPreset">Export</button>
+      <button class="btn ghost" id="importPreset">Import</button>
+    </div>
+    <input type="file" id="presetFile" accept="application/json,.json" style="display:none">
+    <div class="hint" id="presetNote">◇ unsaved design</div>
+  </div>
+
+  <div id="panel-wall">
+    <div class="sec">
+      <div class="sec-hd">Wall framing</div>
+      <div class="row">
+        <div class="field"><label>Wall height (in)</label><input type="number" id="wHeight" min="48" step="1" value="96"></div>
+        <div class="field"><label>Stud O.C. (in)</label><input type="number" id="wOC" min="8" max="24" step="1" value="16"></div>
+      </div>
+      <div class="field"><label>Stud size</label>
+        <div class="seg" id="wSizeSeg"><button data-ws="2x4" class="on">2x4</button><button data-ws="2x6">2x6</button></div>
+      </div>
+      <div class="hint">All walls nailed (cylindrical fasteners). Double top plate + single bottom plate. King/jack studs, headers, sills &amp; cripples auto-framed at openings.</div>
+    </div>
+    <div class="sec">
+      <div class="sec-hd">Walls (branching tree)</div>
+      <div id="wallList"></div>
+      <button class="btn ghost" id="addWall" style="width:100%;margin-top:6px">+ Add wall</button>
+      <div class="hint">Wall 1 is the root. Each other wall <b>branches from</b> any wall — at its end, start, or a distance <b>along</b> it (a mid-wall tee) — turning left/right/straight. Use the per-wall <b>↰ Left / ↱ Right / ⊥ Tee</b> buttons to spawn branches off that wall. Corners, T- and +-junctions &amp; closed loops are framed automatically (3-stud default).</div>
+    </div>
+    <div class="sec" id="roofSec"></div>
+    <div class="hint" id="roofWeight" style="display:none;margin-top:6px"></div>
+  </div><!-- /panel-wall -->
+</aside>
+
+<!-- ============ VIEWPORT ============ -->
+<main id="main">
+  <canvas id="gl"></canvas>
+  <div id="legend" class="overlay"></div>
+  <div id="toolbar" class="overlay">
+    <button class="tool" id="tShowHidden" style="display:none">Show hidden</button>
+    <button class="tool on" id="tEdges">Edges</button>
+    <button class="tool" id="tGhost">Ghost</button>
+    <button class="tool on" id="tCut">Cut list</button>
+    <button class="tool" id="tReset">Reset view</button>
+    <input class="tool" id="tFind" type="number" min="0" placeholder="Find #" title="Highlight a piece by its number" style="width:78px">
+  </div>
+  <div id="tooltip" class="overlay"></div>
+  <div id="hint" class="overlay">drag — orbit · scroll — zoom · right-drag — pan · click a piece — inspect</div>
+</main>
+
+<!-- ============ CUT LIST ============ -->
+<aside id="cut">
+  <h2>Cut list &amp; rationale</h2>
+  <div id="rationale"></div>
+  <div class="sec-hd">Members</div>
+  <table id="cutTable"><thead><tr><th>Member</th><th>Size</th><th class="num">Len</th><th class="num">Qty</th></tr></thead><tbody></tbody></table>
+  <div id="totals"></div>
+  <div class="sec-hd" style="margin-top:14px">Buy list (stock)</div>
+  <div class="buy" id="buy"></div>
+  <div id="warnbox"></div>
+  <button class="btn" id="expCut">↧ Export cut list (.txt)</button>
+  <button class="btn ghost" id="expCsv">↧ Export CSV</button>
+  <div class="disclaim">⚠ Heuristic guidance from general structural principles (span-based member sizing, bearing load paths, diagonal bracing for racking). <b>Not engineered or code-compliant.</b> For anything load-bearing or life-safety, have a qualified engineer verify spans, connections, and species/grade.</div>
+</aside>
+
+<!-- changelog modal (hidden by default; #clBody is filled by renderChangelog();
+     opened by the version badge, closed via ✕ / backdrop click / Esc) -->
+<div id="changelog" style="display:none;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.55);align-items:flex-start;justify-content:center;padding:54px 16px;">
+  <div style="background:var(--p1);border:1px solid var(--line);border-radius:10px;max-width:560px;width:100%;max-height:82vh;overflow-y:auto;box-shadow:0 12px 40px rgba(0,0,0,.6);">
+    <div style="display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--p1);">
+      <span style="font-family:var(--sans);font-weight:700;font-size:15px;color:var(--ink);">Changelog</span>
+      <span style="font-size:10px;color:var(--accent);font-weight:600;">Timber·Framer</span>
+      <button class="cl-x" title="Close" style="margin-left:auto;background:var(--p2);border:1px solid var(--line);color:var(--ink);border-radius:6px;width:26px;height:26px;cursor:pointer;font-size:13px;">✕</button>
+    </div>
+    <div id="clBody" style="padding:4px 16px 14px;"></div>
+  </div>
+</div>
+
+<!-- DEPENDENCY: Three.js r128 (global build) from a CDN. Provides the THREE.*
+     globals used below. Swap for a local r128 three.min.js to run fully offline. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+// This is JavaScript: comments are // or /* */ — NEVER <!-- --> (that would be a
+// syntax error here). $ / $$ are tiny querySelector helpers used throughout.
+const $ = s=>document.querySelector(s), $$ = s=>Array.from(document.querySelectorAll(s));
+
+/* ===== Lumber data (actual + nominal sizes, inches) =====
+   LUMBER[size] = {t:thickness, w:width, nt:nominal thickness, nw:nominal width}.
+   t/w are ACTUAL dressed inches (used for geometry & fit); nt/nw are the nominal
+   "2x4" numbers (used only for board-feet). 4x and 6x entries exist so opening
+   headers can be a single solid timber that fills a 2x4 (3.5") or 2x6 (5.5") wall. */
+const LUMBER = {
+  '2x2':{t:1.5,w:1.5, nt:2,nw:2},  '2x3':{t:1.5,w:2.5, nt:2,nw:3},
+  '2x4':{t:1.5,w:3.5, nt:2,nw:4},  '2x6':{t:1.5,w:5.5, nt:2,nw:6},
+  '2x8':{t:1.5,w:7.25,nt:2,nw:8},  '2x10':{t:1.5,w:9.25,nt:2,nw:10},
+  '2x12':{t:1.5,w:11.25,nt:2,nw:12},
+  '4x4':{t:3.5,w:3.5, nt:4,nw:4},  '4x6':{t:3.5,w:5.5, nt:4,nw:6},
+  '4x8':{t:3.5,w:7.25,nt:4,nw:8}, '4x10':{t:3.5,w:9.25,nt:4,nw:10}, '4x12':{t:3.5,w:11.25,nt:4,nw:12},   // solid headers (3.5" thick → fills a 2x4 wall)
+  '6x6':{t:5.5,w:5.5,nt:6,nw:6},  '6x8':{t:5.5,w:7.25,nt:6,nw:8},  '6x10':{t:5.5,w:9.25,nt:6,nw:10}, '6x12':{t:5.5,w:11.25,nt:6,nw:12},  // solid headers for 2x6 walls (5.5" thick)
+};
+const STOCK = [96,120,144,192];          // purchasable board lengths: 8/10/12/16 ft in inches
+const KERF = 0.125;                       // saw-blade kerf (in) lost per cut, used by the bin-packer
+// Per-role display colour (0xRRGGBB) and human label, keyed by member.role. Used by
+// the 3D materials, the cut-list table tags, and the viewport legend.
+const COLORS = {post:0xd98b53, beam:0x5b97d6, joist:0x54c2a0, shelf:0xd9b25a, cleat:0xe0707a, brace:0xb083d8,
+  plate:0x5b97d6, stud:0xd98b53, king:0xd9b25a, jack:0xe0a35a, header:0x54c2a0, sill:0x57c7b0, cripple:0xc99a6a, corner:0xb083d8,
+  rafter:0xc77f43, ridge:0x4f7fd0, tie:0x57c7b0, lookout:0x9aa84e, subfascia:0xcf9b5b, collar:0x7fb0d0, gable:0xc78fb0};   // roof members
+const ROLE_LABEL = {post:'Post', beam:'Beam / rail', joist:'Joist', shelf:'Shelf member', cleat:'Cleat / ledger', brace:'Diagonal brace',
+  plate:'Plate', stud:'Stud', king:'King stud', jack:'Jack / trimmer', header:'Header', sill:'Sill', cripple:'Cripple', corner:'Corner stud',
+  rafter:'Rafter', ridge:'Ridge board', tie:'Ceiling joist / tie', lookout:'Rake lookout / blocking',
+  subfascia:'Subfascia', collar:'Collar tie', gable:'Gable stud / plate'};
+const HWCOL = {pin:0x9296a0, bracket:0x9aa0a8};   // hardware (fastener/bracket) colours
+
+/* ===== State (config) =====
+   P is the ENTIRE design: structure dims/flags + the wall sub-config (P.wall) +
+   shared lumber-size choices + which `mode` is active. It is the one object that
+   gets auto-saved to localStorage and captured wholesale by presets. The values
+   here are the defaults for a fresh visitor (overwritten by saved state below). */
+const P = {
+  L:48, W:24, H:34, oc:16,
+  f_top:true, f_rack:true, f_shelf:false, f_cant:false,
+  brace:'diagonal', joinery:'pin', base:'frame', nShelf:2, overhang:12,
+  mode:'wall',
+  wall:{ height:96, oc:16, size:'2x4', walls:[ {len:144, from:-1, openings:[{kind:'door',x:18,w:36,h:82,sill:0},{kind:'window',x:96,w:36,h:36,sill:30}]}, {len:96, from:0, at:'end', dir:'right', corner:'3stud', openings:[]} ] },
+  autoSize:true, postSize:'4x4', beamSize:'2x4', joistSize:'2x4', braceSize:'2x4',
+};
+// localStorage key. The EXPERIMENTAL fork namespaces its keys (timberframer.*)
+// so iterating here can't corrupt the stable app's saved designs. (Stable uses
+// the un-namespaced timberframer.* keys.)
+const LS='timberframer.v1';   // experimental fork: isolated from stable's saved state
+// Load saved state over the defaults (best-effort; ignore corrupt/blocked storage).
+try{ const s=JSON.parse(localStorage.getItem(LS)||'null'); if(s) Object.assign(P,s); }catch(e){}
+P.mode='wall';   // Structure & Shelving modes removed — this is a wall/roof framer now
+// --- migrations: bring older saved states up to the current schema ---
+if(!['pin','bracket','lap'].includes(P.joinery)) P.joinery='pin';   // migrate old screw/pocket/dowel
+/* migrate old turn-based wall CHAIN → branch tree (from/at/dir). Each wall i>0 used to
+   chain off wall i-1's end with i-1's `turn`; reproduce that exactly so saved designs &
+   presets keep the same geometry, but now each wall can be re-parented to branch. */
+(function migrateWalls(){ const ws=P.wall&&P.wall.walls; if(!Array.isArray(ws)) return;
+  if(!ws.some(w=>w.from===undefined)) return;
+  ws.forEach((w,i)=>{ if(w.from!==undefined) return;
+    if(i===0){ w.from=-1; w.at='end'; w.dir='straight'; }
+    else { const pt=ws[i-1].turn; w.from=i-1; w.at='end'; w.dir=(pt==='left'||pt==='right')?pt:'straight'; } });
+})();
+// roof add-on config (UI scaffold only — no framing generated yet)
+if(P.wall) P.wall.roof = Object.assign({enabled:false, type:'gable', pitch:6, overhang:12, rafterSize:'2x6', rafterOC:16, shedFlip:false, shedShape:'outline'}, P.wall.roof||{});
+
+/* ===== member list + geometry =====
+   members[] is the single source of truth: every builder pushes member objects
+   here, and BOTH the 3D scene and the cut list are derived from it. hardware[]
+   holds schematic fasteners/brackets; HWCOUNT tallies them for the cut list. */
+let members=[], hardware=[], HWCOUNT={pin:0,bracket:0};
+
+/* ===== WALL framing (mode: wall) =====
+   Walls chain at 90° corners. Thickness is on the LEFT of travel (T = D+90°),
+   so the wall body fills the strip z∈[0,t]. At each junction we build an
+   explicit CORNER POST filling the t×t building-corner square, trim each wall
+   back so its body BUTTS that post, and LAP the plates across the corner (the
+   cap runs over as one continuous board → no corner seam) — so corners always
+   meet at clean butt joints and close the exterior 90°.
+     · right turn → convex corner: the square sits past the vertex (a gap) → no
+       trim; the post fills it and both walls butt it.
+     · left turn  → reflex corner: the square overlaps both walls → each is
+       trimmed back by t so it butts the post instead of overlapping. */
+// normalise a corner setting (handles legacy numeric 2/3/4)
+const CORNER_TYPES=['california','2stud','3stud','4stud'];
+function cornerType(v){ if(v===2||v==='2')return '2stud'; if(v===4||v==='4')return '4stud';
+  return (v==='2stud'||v==='3stud'||v==='4stud')? v : '3stud'; }   // 'california' is BROKEN — coerced to 3-stud so it never builds
+/* Corner stud post. Per the standard chart, (N−1) "facing" studs (A) fill the corner
+   solid in wall 1's direction — wide across wall 1, packed TIGHT from the exterior
+   corner inward (no gaps) — and ONE perpendicular stud (B) is tucked into wall 2's
+   BODY so it BUTTS the facing studs end-on. The perpendicular stud never crosses the
+   facing studs, so there is no volumetric overlap (no clipping) and no centre hole.
+   Wall 2's own studs in that first `t` are skipped in buildWall (startCorner).
+     2stud      → 1 facing + 1 perpendicular (L, open inside corner for a drywall clip)
+     california → 2 studs ending the walls (exterior L: A(t-h)+B(h)) + 1 FLAT backer A(h)
+                  set to the interior, wide face exposed to back the LEAVING wall's drywall,
+                  corner cavity left OPEN for insulation (true California / advanced-framing corner)
+     3stud      → 2 facing with a drywall channel + 1 perpendicular
+     4stud      → 3 facing (packed solid) + 1 perpendicular                          */
+function addCornerPost(C, D1, D2, type, sz, H, t, pT, wi){
+  const N1=new THREE.Vector3(-D1.z,0,D1.x), N2=new THREE.Vector3(-D2.z,0,D2.x);   // wall thickness dirs (left of travel)
+  const studBot=pT, studTop=H-2*pT, h=pT/2;
+  const stud=(a,b,wide)=>{ const p=C.clone().addScaledVector(N1,a).addScaledVector(N2,b);
+    members.push({role:'corner',size:sz, start:new THREE.Vector3(p.x,studBot,p.z),
+      end:new THREE.Vector3(p.x,studTop,p.z), wide:wide.clone().normalize(), len:studTop-studBot, notches:[], wall:wi, corner:true}); };
+  const A=b=> stud(t/2, b, N1);        // facing stud: spans wall 1's thickness, 1.5 thick at b
+  const B=d=> stud(-d, t/2, N2);       // perpendicular stud: tucked depth d into wall 2's body
+  type=cornerType(type);
+  if(type==='2stud'){ A(t-h); B(h); }
+  else if(type==='california'){ A(t-h); B(h); A(h); }                   // exterior L (wall-A end + wall-B end) + FLAT backer at the interior (open corner)
+  else if(type==='3stud'){ A(t-h); A(0); B(h); }                        // facing + facing nailer slid along wall 1 (half abuts the perp, half exposed) + perp
+  else { A(t-h); A(t-h-pT); A(t-h-2*pT); B(h); }                        // 4stud: 3 packed + perp
+}
+const nextDir=(d,turn)=> turn==='left'? new THREE.Vector3(-d.z,0,d.x) : turn==='right'? new THREE.Vector3(d.z,0,-d.x) : d.clone();
+const rot90L=d=> new THREE.Vector3(-d.z,0,d.x);     // thickness/left-of-travel normal
+/* Proper PARTITION-TEE framing: where a wall butts into a THROUGH wall, build a U-shaped
+   channel IN the through wall — a flat **nailer** that the butting wall end-nails to, flanked
+   by two full-depth **backing studs** flush just outside the partition's two faces (drywall
+   backing on both sides). This is the standard "3-2x U" / partition-stud-blocking detail. All
+   standard studs, positioned so nothing interpenetrates. `Oj/Dj` = through-wall frame, `s` =
+   station of the tee along it, `pDir` = the unit direction the partition extends. */
+function addPartitionPost(Oj, Dj, s, pDir, bodyDir, sz, H, t, pT, wi, placed){
+  const Tj=rot90L(Dj), studBot=pT, studTop=H-2*pT;
+  const pComp=pDir.dot(Tj);                                   // +1 partition on the through-body side, −1 open side
+  // footprint side = the side the partition's BODY actually occupies (rot90L of the wall's travel dir). Using the
+  // EXTEND direction (rot90L(pDir)) gets this backwards at END-junctions (divider ending in a through wall), which
+  // put the post on the wrong side of the divider — off the divider beam. bodyDir is correct for start AND end.
+  const q=bodyDir.dot(Dj);                                    // which way the partition footprint runs along the wall
+  const a0=q>0? s : s-t, a1=a0+t;                             // partition footprint [a0,a1] along the through wall
+  // (x,z) are LOCAL to the through wall (u=along Dj, v=along Tj). A stud is skipped if it would
+  // volumetrically overlap one already placed at this junction — so where two partitions tee at
+  // one station (a + crossing) the second one SHARES the existing studs instead of clashing.
+  const studAt=(x,z,wideV)=>{ const p=Oj.clone().addScaledVector(Dj,x).addScaledVector(Tj,z);
+    const alongU=Math.abs(wideV.dot(Dj))>0.5;                 // does the 'wide' face span the wall-length axis?
+    const uh=alongU? t/2:pT/2, vh=alongU? pT/2:t/2, f={u0:x-uh,u1:x+uh,v0:z-vh,v1:z+vh};
+    if(placed && placed.some(g=> Math.min(f.u1,g.u1)-Math.max(f.u0,g.u0)>0.1 && Math.min(f.v1,g.v1)-Math.max(f.v0,g.v0)>0.1)) return;
+    if(placed) placed.push(f);
+    members.push({role:'corner',size:sz, start:new THREE.Vector3(p.x,studBot,p.z), end:new THREE.Vector3(p.x,studTop,p.z),
+      wide:wideV.clone().normalize(), len:studTop-studBot, notches:[], wall:wi, corner:true}); };
+  studAt((a0+a1)/2, pComp>0? t/2 : pT/2, Dj);                 // NAILER — flat, spans the partition width; when the partition runs ALONG the through-wall body (divider, pComp>0) the nailer sits CENTRED on the body so it lines up under the divider beam (was at the far face)
+  studAt(a0-pT/2, t/2, Tj);                                   // BACKING stud just outside one partition face
+  studAt(a1+pT/2, t/2, Tj);                                   // BACKING stud just outside the other face
+  return [a0-pT, a1+pT];                                      // full footprint (incl. backings) along the through wall
+}
+// default built-up header size by rough-opening width (light-duty starting point; user can override)
+function defHeaderSize(w){ return w<=36?'2x6': w<=60?'2x8': w<=84?'2x10':'2x12'; }
+/* buildWall() — generate the whole branching stud-wall layout into members[].
+   TWO PASSES:
+     PASS 1 resolves each wall's world placement {O (origin), D (travel/length dir),
+       len} by walking the branch tree (place(), iterated until parents resolve).
+     Then JUNCTIONS are found purely GEOMETRICALLY: cluster all wall endpoints by
+       rounded position; corners, T/+ tees, mid-wall pass-throughs and closed loops
+       all fall out of one mechanism. Each junction records per-wall trims/laps/skips
+       into cut[i] and builds its corner/partition post.
+     PASS 2 frames each wall (plates, common studs, opening framing) using cut[i].
+   Per-wall LOCAL frame: x = along length (D), y = up (Yv), z = across thickness (T,
+   = D rotated +90° = "left of travel"); L2W(x,y,z) maps local → world. */
+function buildWall(){
+  members=[]; hardware=[]; HWCOUNT={pin:0,bracket:0};
+  const WP=P.wall, sz=WP.size, Lm=LUMBER[sz], t=Lm.w, pT=1.5;     // t = wall thickness (3.5/5.5)
+  const H=Math.max(48,WP.height), oc=Math.max(8,WP.oc);
+  const Yv=new THREE.Vector3(0,1,0), X=new THREE.Vector3(1,0,0), O0=new THREE.Vector3(0,0,0);
+  const walls=WP.walls||[], n=walls.length;
+
+  /* PASS 1 — resolve each wall's world placement {O,D,len} from the branch TREE.
+     A wall branches from a parent at the parent's start / end / a distance along it,
+     turning left / right / straight. The first wall (or any wall whose parent can't be
+     resolved) is a ROOT at the origin heading +X. Old chain data (turn-based) is migrated
+     to from/at/dir on load, so plain chains and closed loops still build as before. */
+  const F=new Array(n).fill(null);
+  function place(i){ const w=walls[i], from=(w.from==null?-1:w.from);
+    if(i===0 || from<0 || from>=n || from===i){ F[i]={O:O0.clone(),D:X.clone(),len:Math.max(12,w.len||96)}; return true; }
+    if(!F[from]) return false;
+    const Fp=F[from];
+    const s = w.at==='start'?0 : (w.at==='end'||w.at==null)?Fp.len : Math.max(0,Math.min(Fp.len, parseFloat(w.at)||0));
+    const V=Fp.O.clone().addScaledVector(Fp.D,s);
+    const D = w.dir==='left'?nextDir(Fp.D,'left') : w.dir==='right'?nextDir(Fp.D,'right') : Fp.D.clone();
+    F[i]={O:V, D, len:Math.max(12,w.len||96)}; return true;
+  }
+  for(let pass=0; pass<=n; pass++){ let done=true; for(let i=0;i<n;i++) if(!F[i]&&!place(i)) done=false; if(done) break; }
+  for(let i=0;i<n;i++) if(!F[i]) F[i]={O:O0.clone(),D:X.clone(),len:Math.max(12,walls[i].len||96)};   // cycle fallback
+  const endOf=i=>F[i].O.clone().addScaledVector(F[i].D,F[i].len);
+
+  /* JUNCTIONS — cluster wall ends by position; an "arm" is a unit direction the wall
+     material extends AWAY from the vertex. Then detect mid-wall tees: a vertex strictly
+     interior to another wall makes that wall a PASS-THROUGH there. All turns are 90°, so
+     junctions are orthogonal. Corners, closed loops, tees & crossings all fall out here. */
+  const KEY=p=>Math.round(p.x*4)/4+'|'+Math.round(p.z*4)/4;
+  const J={};
+  const addArm=(p,wall,dir,kind)=>{ const k=KEY(p); (J[k]||(J[k]={V:p.clone(),arms:[],thru:[]})).arms.push({wall,dir:dir.clone().normalize(),kind}); };
+  for(let i=0;i<n;i++){ addArm(F[i].O,i,F[i].D,'start'); addArm(endOf(i),i,F[i].D.clone().negate(),'end'); }
+  // per-wall cut record: end/start trims, plate-lap flags, junction-at-end/start, mid skips
+  const cut=F.map(()=>({s0:0,s1:0,lap0:false,lap1:false,j0:false,j1:false,tee0:false,tee1:false,skips:[]}));
+  for(const k in J){ const V=J[k].V;
+    for(let j=0;j<n;j++){ const O=F[j].O, D=F[j].D, len=F[j].len; const rel=V.clone().sub(O); const s=rel.dot(D);
+      if(s>1.0 && s<len-1.0 && rel.clone().addScaledVector(D,-s).length()<0.5){     // V is interior to wall j → tee
+        J[k].arms.push({wall:j,dir:D.clone(),kind:'thru'},{wall:j,dir:D.clone().negate(),kind:'thru'});
+        J[k].thru.push(j);                                  // skip is pushed as a precise footprint when the post is built
+      } }
+  }
+  const perp=(a,b)=>Math.abs(a.dot(b))<0.05;
+  const turnSense=(d1,d2)=> nextDir(d1,'left').distanceTo(d2)<1e-3?'left' : nextDir(d1,'right').distanceTo(d2)<1e-3?'right':'straight';
+  const mark=(w,side,o)=>{ const c=cut[w]; if(side==='end'){ if(o.trim!=null)c.s1=o.trim; if(o.lap)c.lap1=true; c.j1=true; }
+    else { if(o.trim!=null)c.s0=o.trim; if(o.lap)c.lap0=true; c.j0=true; } };
+
+  for(const k in J){ const arms=J[k].arms, V=J[k].V; if(arms.length<2) continue;
+    const ep=arms.filter(a=>a.kind!=='thru');
+    const hasPerp=arms.some((a,x)=>arms.some((b,y)=>x<y && perp(a.dir,b.dir)));
+    if(!hasPerp || ep.length<1) continue;                 // collinear splice / straight run → no post, butt
+    if(arms.length===2 && ep.length===2 && perp(arms[0].dir,arms[1].dir)){
+      // ---- L corner: keep the elegant 2/3/4-stud corner techniques + plate lapping ----
+      let a1=ep[0], a2=ep[1];
+      if(a1.kind!=='end' && a2.kind==='end'){ const tmp=a1; a1=a2; a2=tmp; }   // wall1 = arriving
+      const D1=a1.dir.clone().negate(), D2=a2.dir.clone();                     // D1 arrives, D2 leaves
+      addCornerPost(V, D1, D2, walls[a2.wall].corner, sz, H, t, pT, a1.wall);
+      const trim = turnSense(D1,D2)==='left' ? t : 0;                          // reflex side trims; both lap the cap
+      mark(a1.wall, a1.kind, {trim, lap:true});
+      mark(a2.wall, a2.kind, {trim, lap:true});
+    } else {
+      // ---- partition tee(s): wall(s) butt into a through RUN. Build a U-channel in the
+      //      through wall for each butting (perpendicular) wall; through-line walls just pass ----
+      let thruWall = J[k].thru.length ? J[k].thru[0] : -1;
+      if(thruWall<0){                                 // no pass-through → the run is a collinear endpoint pair
+        for(let x=0;x<ep.length && thruWall<0;x++) for(let y=x+1;y<ep.length;y++)
+          if(ep[x].dir.clone().add(ep[y].dir).length()<1e-3){ thruWall=ep[x].wall; break; }
+        if(thruWall<0) thruWall=ep[0].wall;
+      }
+      const Du=F[thruWall].D.clone(), Oj=F[thruWall].O, s=V.clone().sub(F[thruWall].O).dot(Du);
+      const placed=[];                                                        // post studs already at this junction (shared, not re-clashed)
+      ep.forEach(a=>{
+        if(!perp(a.dir,Du)){                                                  // through-line (straight) wall → clear its studs across the post
+          const sLoc=V.clone().sub(F[a.wall].O).dot(F[a.wall].D);
+          cut[a.wall].skips.push([sLoc-(t/2+pT), sLoc+(t/2+pT)]); return;
+        }
+        const fp=addPartitionPost(Oj, Du, s, a.dir, rot90L(F[a.wall].D), sz, H, t, pT, a.wall, placed);   // butting (partition) wall
+        cut[thruWall].skips.push(fp);                                         // clear through studs over the post's TRUE footprint
+        mark(a.wall, a.kind, {trim: a.dir.dot(rot90L(Du))>0? t : 0, lap:false});
+        // the child wall butts here → KEEP its own end stud (sistered flat to the tee post), unlike an L-corner
+        if(a.kind==='end') cut[a.wall].tee1=true; else cut[a.wall].tee0=true;
+      });
+    }
+  }
+
+  /* PASS 2 — build each wall, trimmed/lapped per its cut record */
+  for(let i=0;i<n;i++){
+    const wall=walls[i], O=F[i].O, D=F[i].D, len=F[i].len, C=cut[i];
+    const T=rot90L(D);                                           // thickness dir (D rotated +90°)
+    const L2W=(x,y,z)=> O.clone().addScaledVector(D,x).addScaledVector(Yv,y).addScaledVector(T,z);
+    const add=(role,size,x0,y0,z0,x1,y1,z1,wideAxis,extra)=>{
+      const a=L2W(x0,y0,z0), b=L2W(x1,y1,z1);
+      const wide=(wideAxis==='x'?D:wideAxis==='z'?T:Yv);
+      members.push(Object.assign({role,size,start:a,end:b,wide:wide.clone().normalize(),len:a.distanceTo(b),wall:i},extra||{}));
+    };
+    const x0w=C.s0, x1w=len-C.s1;
+    const studBot=pT, studTop=H-2*pT;                            // between bottom plate & double top plate
+    /* plates: bottom + double top. At L corners they LAP across so the cap reads as one
+       continuous board (cap + bottom run over the end corner; the lower top cross-laps the
+       start corner — the standard double-top-plate tie). At tee/× junctions they butt. */
+    const capB=C.lap1? x1w+t : x1w, ltA=C.lap0? x0w-t : x0w;
+    add('plate',sz, x0w,pT/2,t/2,     capB,pT/2,t/2,'z');        // bottom
+    add('plate',sz, x0w,H-pT/2,t/2,   capB,H-pT/2,t/2,'z');      // cap / top
+    add('plate',sz, ltA,H-pT*1.5,t/2, x1w,H-pT*1.5,t/2,'z');     // lower top
+    const ops=(wall.openings||[]).map(o=>{const ow=Math.max(6,o.w||30);return {kind:o.kind,x:Math.max(0,Math.min(len-6,o.x||0)),w:ow,h:Math.max(6,o.h||60),sill:(o.kind==='window'?Math.max(0,o.sill||30):0),
+      header:o.header||defHeaderSize(ow), bearing:o.bearing!==false};});
+    const inOpening=(xl)=> ops.some(o=> xl+pT> o.x-pT-1e-3 && xl < o.x+o.w+pT+1e-3);
+    const inTee=(xl)=> C.skips.some(s=> Array.isArray(s)
+        ? (xl < s[1]-1e-6 && xl+pT > s[0]+1e-6)                                // interval: post footprint along the wall
+        : Math.abs((xl+pT/2)-s) < t/2+pT);                                     // legacy point skip
+    /* common studs at O.C. + an end stud, within the framed span, skipping openings & junctions.
+       Near a junction the POST already supplies the studs, so skip the first/last `t` there. */
+    const slo=x0w+((C.j0&&!C.tee0)?pT:0), shi=x1w-pT-((C.j1&&!C.tee1)?pT:0);   // tee ends keep the child's sister stud; L-corners skip it
+    const xs=[]; for(let x=0;x<=x1w-pT+1e-6;x+=oc) xs.push(x); xs.push(x0w); xs.push(x1w-pT);
+    const seenX=new Set();
+    xs.forEach(xl=>{ if(xl<slo-1e-6||xl>shi+1e-6) return; if(inOpening(xl)||inTee(xl)) return;
+      const kx=Math.round(xl*16); if(seenX.has(kx)) return; seenX.add(kx);     // no duplicate studs at the same station
+      add('stud',sz, xl+pT/2,studBot,t/2, xl+pT/2,studTop,t/2,'z'); });
+    /* opening framing: kings, jacks, header, sill, cripples */
+    ops.forEach(o=>{
+      const x0=o.x, w=o.w, headBot=o.sill+o.h;
+      /* side framing: king (full height) + jack/trimmer (up to the header), each side */
+      add('king',sz, x0-pT/2,studBot,t/2,  x0-pT/2,studTop,t/2,'z');
+      add('king',sz, x0+w+pT/2,studBot,t/2, x0+w+pT/2,studTop,t/2,'z');
+      add('jack',sz, x0+pT/2,studBot,t/2,   x0+pT/2,headBot,t/2,'z');
+      add('jack',sz, x0+w-pT/2,studBot,t/2, x0+w-pT/2,headBot,t/2,'z');
+      /* header — laid ON EDGE, bearing on the jacks; depth capped to fit under the top plate */
+      let topB;
+      if(o.bearing){
+        const solid=/^(4|6)x/.test(o.header);
+        if(solid){
+          // a single SOLID timber that fills the wall thickness: 4x (3.5") on a 2x4 wall, 6x on a 2x6 wall.
+          // The stored value may be 4x or 6x; the wall's stud size decides the family, depth is preserved.
+          const depth=o.header.slice(o.header.indexOf('x')+1);
+          const hSize=(sz==='2x6'?'6x':'4x')+depth, A=LUMBER[hSize], effW=Math.min(A.w, studTop-headBot);
+          if(effW>0.5) add('header',hSize, x0,headBot+effW/2,t/2, x0+w,headBot+effW/2,t/2,'y',{xsec:{t:A.t,w:effW}});
+          topB=headBot+effW;
+        } else {
+          // built-up: N plies of 2x (1.5") + 1/2" plywood spacers, filling the wall thickness flush
+          const A=LUMBER[o.header], effW=Math.min(A.w, studTop-headBot);
+          if(effW>0.5){
+            const yc=headBot+effW/2, nply=Math.max(2,Math.round((t+0.5)/2));   // 2x4 wall → 2 plies, 2x6 → 3
+            for(let k=0;k<nply;k++)   add('header',o.header, x0,yc,pT/2+k*2,   x0+w,yc,pT/2+k*2,  'y',{xsec:{t:pT,w:effW}});
+            for(let k=0;k<nply-1;k++) add('header','½″ ply', x0,yc,pT/2+1+k*2, x0+w,yc,pT/2+1+k*2,'y',{xsec:{t:0.5,w:effW},sheet:true});
+          }
+          topB=headBot+effW;
+        }
+      } else {
+        add('header',sz, x0,headBot+pT/2,t/2, x0+w,headBot+pT/2,t/2,'z');   // non-bearing: a single flat 2x
+        topB=headBot+pT;
+      }
+      /* sill (windows) + cripples — confined to the CLEAR opening between the jacks so a
+         grid-aligned cripple can't clip a jack */
+      const clo=x0+pT, chi=x0+w-pT;
+      if(o.kind==='window'&&o.sill>0){
+        add('sill',sz, clo,o.sill-pT/2,t/2, chi,o.sill-pT/2,t/2,'z');
+        for(let x=Math.ceil(clo/oc)*oc; x+pT<=chi+1e-6; x+=oc) add('cripple',sz, x+pT/2,studBot,t/2, x+pT/2,o.sill-pT,t/2,'z');
+      }
+      if(topB<studTop-1) for(let x=Math.ceil(clo/oc)*oc; x+pT<=chi+1e-6; x+=oc) add('cripple',sz, x+pT/2,topB,t/2, x+pT/2,studTop,t/2,'z');
+    });
+  }
+  buildRoof();   // gable roof on top of a closed rectangular wall loop (no-op otherwise)
+  members.forEach(m=>{ if(!m.geo) m.len=m.start.distanceTo(m.end); });   // keep ePiece/gPiece's true length; recompute only box pieces
+}
+// wallRationale() — plain-English HTML summary of the wall build (shown above the
+// cut list in Wall mode). Counts walls/openings and describes the framing approach.
+function wallRationale(){
+  const ws=P.wall, nW=ws.walls.length, nO=ws.walls.reduce((a,w)=>a+(w.openings||[]).length,0);
+  return `<b>${nW} wall${nW>1?'s':''}</b> in a <b>branching layout</b>, ${ws.size} @ ${ws.oc}&Prime; O.C., ${ws.height}&Prime; high.<br><br>`+
+    `Each wall = <b>single bottom plate</b> + <b>double top plate</b> with common studs at O.C. <b>Openings</b> get <b>king studs</b> (full height), <b>jack/trimmer studs</b> carrying a <b>doubled header</b>, plus <b>cripples</b> above (and below a window <b>sill</b>).<br><br>`+
+    `<b>L-corners</b> use the picked stud count (3-stud default) for nailing/backing; <b>T- and +-junctions</b> and mid-wall <b>tees</b> get a built-up junction post that every wall butts. All connections are <b>nailed</b> (cylindrical fasteners).`;
+}
+
+/* ===== ROOF framing (GABLE) — generated on top of a closed RECTANGULAR wall loop =====
+   Grounded in the research brief: a rafter's "span" is the HORIZONTAL run (bearing wall → ridge),
+   pitch = rise per 12 of run; the sloped cut length is derived from that run. Ridge runs along the
+   LONGER axis; common rafters span the shorter axis to a central ridge board.
+   Rafters are CUT extruded profiles (memMesh renders any member with .geo): a PLUMB cut at the ridge
+   (mates the vertical ridge-board face), a BIRDSMOUTH (seat + heel) where they bear on the top plate,
+   and a plumb tail at the eave. Eave overhang spans the rafters; the RAKE (gable) overhang is framed
+   with an extended ridge, BARGE (fly) rafters, and level LOOKOUT blocking.
+   SCOPE: rectangular footprints (4-wall loop), GABLE only; shed/hip/flat & span-table sizing TODO.
+   Heuristic, NOT engineered. */
+function buildRoof(){
+  const RF = P.wall.roof; if(!RF || !RF.enabled) return;
+  const walls = (P.wall && P.wall.walls) || [];
+  if(!wallsClosed() || (RF.type!=='gable' && RF.type!=='shed')) return;       // closed footprint required
+  if(RF.type==='gable' && walls.length!==4) return;   // gable still needs a plain 4-wall rectangle (for now)
+  // shed: builds over the footprint's bounding rectangle (multi-rectangle OK) — "one slope over bbox"
+  const t = (LUMBER[P.wall.size]||LUMBER['2x4']).w;   // wall thickness = birdsmouth seat length
+  // EXTERIOR envelope: include each wall's BODY (O + thickness·T) so cMin/cMax are the true OUTER faces
+  // regardless of loop direction (left- vs right-turn). This puts the eave/heel and the ceiling joist
+  // on the OUTER plate edges either way.
+  const F = wallFrames(), xs=[], zs=[];
+  F.forEach(f=>{ const b=f.O.clone().addScaledVector(f.D,f.len), T=new THREE.Vector3(-f.D.z,0,f.D.x);
+    [f.O, b, f.O.clone().addScaledVector(T,t), b.clone().addScaledVector(T,t)].forEach(p=>{ xs.push(p.x); zs.push(p.z); }); });
+  const minX=Math.min(...xs), maxX=Math.max(...xs), minZ=Math.min(...zs), maxZ=Math.max(...zs);
+  const Lx=maxX-minX, Lz=maxZ-minZ; if(Lx<6 || Lz<6) return;
+  const H = Math.max(48, P.wall.height);              // top of wall (top plate) = rafter bearing height
+  const slope = Math.max(0, RF.pitch||0)/12;          // rise per unit of run
+  const ov = Math.max(0, RF.overhang||0);             // overhang (used for BOTH eave and rake)
+  const A = LUMBER[RF.rafterSize] || LUMBER['2x6'];   // rafter cross-section: A.w deep ⟂ slope, A.t thick
+  const rt = 1.5, pT = 1.5, Lf = Math.hypot(1,slope), vT = A.w*Lf;   // rt=ridge thk, pT=plate thk; vT = sloped rafter's VERTICAL thickness
+
+  const alongX = Lx >= Lz;
+  const aMin = alongX?minX:minZ, aMax = alongX?maxX:maxZ;          // along the ridge
+  const cMin = alongX?minZ:minX, cMax = alongX?maxZ:maxX;          // across (rafter span)
+  const cMid = (cMin+cMax)/2;
+  const P3  = (a,c,y)=> alongX ? new THREE.Vector3(a,y,c) : new THREE.Vector3(c,y,a);   // (along,across,up)→world
+  const eaC = alongX ? new THREE.Vector3(0,0,1) : new THREE.Vector3(1,0,0);   // +c (across) world dir
+  const eY  = new THREE.Vector3(0,1,0);
+  const enA = alongX ? new THREE.Vector3(1,0,0) : new THREE.Vector3(0,0,1);   // +a (along ridge) world dir
+  const push = (role,size,s,e,wide,extra)=> members.push(Object.assign({role,size,start:s,end:e,wide:wide.clone().normalize(),len:s.distanceTo(e),notches:[]}, extra||{}));
+  // an extruded roof piece from a (c,y) profile, depth `d` in a, centred at aG (shared by shed pieces)
+  const ePiece=(role,size,aG,pts,d,len,extra)=>{
+    let area=0; for(let i=0;i<pts.length;i++){const p=pts[i],q=pts[(i+1)%pts.length]; area+=p[0]*q[1]-q[0]*p[1];}
+    if(area<0) pts.reverse();
+    const sh=new THREE.Shape(); pts.forEach((p,i)=> i?sh.lineTo(p[0],p[1]):sh.moveTo(p[0],p[1])); sh.closePath();
+    const geo=new THREE.ExtrudeGeometry(sh,{depth:d,bevelEnabled:false,steps:1}); geo.translate(0,0,-d/2); geo.computeVertexNormals();
+    const cs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]), cc=(Math.min(...cs)+Math.max(...cs))/2;
+    // ACTUAL board length = the longest profile EDGE (the slope / long way of the board) or the extrusion depth,
+    // whichever is the long dimension — NOT the vertical start→end span (which line 879 used to overwrite it with).
+    let edgeMax=0; for(let i=0;i<pts.length;i++){const p=pts[i],q=pts[(i+1)%pts.length]; edgeMax=Math.max(edgeMax,Math.hypot(p[0]-q[0],p[1]-q[1]));}
+    members.push(Object.assign({role, size, kind:'roof', geo, xf:new THREE.Matrix4().makeBasis(eaC,eY,enA).setPosition(P3(aG,0,0)),
+      start:P3(aG,cc,Math.min(...ys)), end:P3(aG,cc,Math.max(...ys)), len:Math.max(d, edgeMax), notches:[]}, extra||{}));
+  };
+
+  // ── SHED / MONO-PITCH ───────────────────────────────────────────────────────────────────────────
+  if(RF.type==='shed'){
+    const sz=P.wall.size, oc=Math.max(8, RF.rafterOC||16), flip=!!RF.shedFlip, drop=pT*Lf;
+    // LOW vs HIGH wall picked by the flip toggle (default: high = cMax side)
+    const cLowO=flip?cMax:cMin, cLowI=flip?cMax-t:cMin+t, cHighI=flip?cMin+t:cMax-t, cHighO=flip?cMin:cMax;
+    const cLowEave=flip?cMax+ov:cMin-ov, cHighEave=flip?cMin-ov:cMax+ov, mm=flip?-slope:slope;
+    const yb = c => H + (c-cLowI)*mm;            // rafter bottom: =H at the LOW inner edge, rising to the HIGH wall
+    const Hhigh = yb(cHighI), td=Math.sign(cLowEave-cHighEave);   // td = top-edge traversal dir (high eave→low eave)
+    const yt=c=>yb(c)+vT, rLen=Math.hypot(cHighEave-cLowEave, yb(cHighEave)-yb(cLowEave));
+
+    // ── MULTI-RECTANGLE strategy ───────────────────────────────────────────────────────────────────
+    // >4 walls (L-shapes / wings) always FOLLOW THE OUTLINE: each rafter is clipped to the footprint at
+    // its position so the roof follows the outline. A single rectangle (≤4 walls) is just one slope.
+    const shape = walls.length>4 ? 'outline' : 'bbox';
+    if(shape==='outline'){
+      // walls running PARALLEL to the ridge axis (`a`): each gives a c-line over an a-range → these bound
+      // the footprint's across-span at any `a`. (Walls running across `a` are the rake sides; ignored here.)
+      const aRun=[];   // `tc` = c-component of the wall's thickness dir T=(-Dz,0,Dx) → points into the BODY
+      F.forEach(f=>{ const da=alongX?f.D.x:f.D.z;
+        if(Math.abs(da)>0.7){ const p0=alongX?f.O.x:f.O.z, p1=p0+da*f.len;
+          aRun.push({c:+(alongX?f.O.z:f.O.x).toFixed(2), a0:Math.min(p0,p1), a1:Math.max(p0,p1), tc:(alongX?f.D.x:-f.D.z)}); } });
+      // footprint across-span at `a` = the OUTER faces of the bounding aRun walls (body = O-line + tc·t),
+      // so rafters seat on the wall plates (not t inside them) regardless of loop direction.
+      const footC=a=>{ const ws=aRun.filter(w=> a>=w.a0-0.5 && a<=w.a1+0.5); if(ws.length<2) return null;
+        const lo=ws.reduce((m,w)=>w.c<m.c?w:m), hi=ws.reduce((m,w)=>w.c>m.c?w:m);
+        return [lo.c+lo.tc*t, hi.c+hi.tc*t]; };
+      // a rafter clipped to [cwL,cwR] with a birdsmouth + overhang tail at each wall (seats ride yb).
+      // notchCs (optional) = c-centres of LOOKOUT notches cut into the TOP edge (only the END/rake rafters).
+      const oRafter=(a,cwL,cwR,birds,notchCs)=>{ const sL=yb(cwL+t), sR=yb(cwR-t);   // birds=false → straight barge
+        const bot = birds===false ? [[cwL-ov,yb(cwL-ov)],[cwR+ov,yb(cwR+ov)]]
+          : [[cwL-ov,yb(cwL-ov)],[cwL,yb(cwL)],[cwL,sL],[cwL+t,sL],[cwR-t,sR],[cwR,sR],[cwR,yb(cwR)],[cwR+ov,yb(cwR+ov)]];
+        const top=[[cwR+ov,yt(cwR+ov)]];   // top edge high→low c, dipping into each lookout notch
+        if(notchCs) for(const cl of notchCs.slice().sort((p,q)=>q-p)){
+          const hw=1.75/Lf, dc=mm/Lf*1.5, dy=-1.5/Lf, en=cl+hw, lv=cl-hw;
+          top.push([en,yt(en)],[en+dc,yt(en)+dy],[lv+dc,yt(lv)+dy],[lv,yt(lv)]); }
+        top.push([cwL-ov,yt(cwL-ov)]);
+        ePiece('rafter', RF.rafterSize, a, bot.concat(top), A.t,
+               Math.hypot((cwR-cwL)+2*ov, yb(cwR+ov)-yb(cwL-ov))); };
+      // span the FOOTPRINT a-range (the aRun walls' extent), so rafters land on the rake walls (then overhang)
+      const fMin=Math.min(...aRun.map(w=>w.a0)), fMax=Math.max(...aRun.map(w=>w.a1));
+      const nB=Math.max(1,Math.ceil((fMax-fMin)/oc)), sp=(fMax-fMin)/nB;
+      // INTERIOR rake (cRun) walls = the SHARED walls between rectangles → a single 4x6-ON-EDGE beam carries
+      // the whole gable plate there (instead of a thin rafter). Collect their body-centre `a`.
+      const A6=LUMBER['4x6'], vT6=A6.w*Lf, sharedAGs=[];
+      F.forEach(f=>{ const dc=alongX?f.D.z:f.D.x;
+        if(Math.abs(dc)>0.7){ const wa=+(alongX?f.O.x:f.O.z).toFixed(2);
+          if(Math.abs(wa-fMin)>1 && Math.abs(wa-fMax)>1) sharedAGs.push(wa+(alongX?-f.D.z:f.D.x)*t/2); } });
+      const valid=[]; for(let i=0;i<=nB;i++){ const a=fMin+i*sp;
+        if(sharedAGs.some(g=>Math.abs(a-g)<A6.t/2+0.5)) continue;   // the 4x6 beam takes this slot
+        const ce=footC(a); if(ce && ce[1]-ce[0]>t*2) valid.push({a,ce}); }
+      const lookCs=ce=>[0.25,0.5,0.75].map(fr=>ce[0]+(ce[1]-ce[0])*fr);
+      let f0=null,fce=null,l0=null,lce=null;
+      if(valid.length){ f0=valid[0].a;fce=valid[0].ce; l0=valid[valid.length-1].a;lce=valid[valid.length-1].ce; }
+      for(const v of valid){ const isEnd=v.a===f0||v.a===l0;   // END (rake) rafters get the lookout notches
+        oRafter(v.a, v.ce[0], v.ce[1], true, isEnd?lookCs(v.ce):null); }
+      // RAKE overhang at the two exterior rake ends (a-direction): barge (fly) rafter + roof-plane lookouts
+      const lw=new THREE.Vector3().copy(eaC).multiplyScalar(1/Lf).addScaledVector(eY, mm/Lf);
+      for(const e of [{a:f0,dir:-1,ce:fce,a2:f0+sp},{a:l0,dir:1,ce:lce,a2:l0-sp}]){ if(e.a===null) continue;
+        oRafter(e.a+e.dir*ov, e.ce[0], e.ce[1], false);                       // barge clipped to the rake c-extent
+        const bi=e.a+e.dir*(ov-A.t/2), lo=Math.min(bi,e.a2), hi=Math.max(bi,e.a2); if(hi-lo<1) continue;
+        for(const cl of lookCs(e.ce)){ const cc=cl+0.75*mm/Lf, yy=yb(cl)+vT-0.75/Lf;   // lookouts drop into the notches
+          push('lookout','2x4', P3(lo,cc,yy), P3(hi,cc,yy), lw); } }
+      // 4x6-ON-EDGE beam directly above each SHARED gable plate: same eave-to-eave span AND the same
+      // birdsmouth seats + overhang tails as the long (main) rafters — just 3.5" thick instead of 1.5".
+      for(const g of sharedAGs){ const cwL=cMin, cwR=cMax, sL=yb(cwL+t), sR=yb(cwR-t);
+        const pts=[[cwL-ov,yb(cwL-ov)],[cwL,yb(cwL)],[cwL,sL],[cwL+t,sL],[cwR-t,sR],[cwR,sR],[cwR,yb(cwR)],[cwR+ov,yb(cwR+ov)],
+                   [cwR+ov,yb(cwR+ov)+vT6],[cwL-ov,yb(cwL-ov)+vT6]];
+        ePiece('rafter','4x6', g, pts, A6.t, Math.hypot((cwR-cwL)+2*ov, yb(cwR+ov)-yb(cwL-ov))); }
+      // ROOF CORNER vertices = every rake (cRun) wall END meeting a raised knee wall — exterior corners
+      // (a≈fMin/fMax) AND the interior SHARED-wall ends (e.g. the middle corner where the shared wall meets the
+      // high eave). Used to replicate the wall corner post up AND to skip the knee end stud the post covers.
+      const cornerVerts=[], rakeFaces=[];   // rakeFaces: each rake wall's a-position + its OUTER face (= the exterior corner)
+      F.forEach(f=>{ const dc=alongX?f.D.z:f.D.x; if(Math.abs(dc)<=0.7) return;
+        const wa=+(alongX?f.O.x:f.O.z).toFixed(2), ta=(alongX?-f.D.z:f.D.x), q0=alongX?f.O.z:f.O.x, q1=q0+dc*f.len;
+        rakeFaces.push({a:wa, outer:wa+ta*t});
+        for(const hc of [Math.min(q0,q1),Math.max(q0,q1)])
+          if(aRun.find(kn=>Math.abs(kn.c-hc)<1.5 && wa>=kn.a0-1.5 && wa<=kn.a1+1.5 && yb(kn.c)>H+pT+2)) cornerVerts.push({a:wa,c:hc}); });
+      const nearCorner=(a,c)=>cornerVerts.some(v=>Math.abs(a-v.a)<2 && Math.abs(c-v.c)<2);
+      // the eave cap runs out to the rake wall's OUTER face at its end (the exterior corner) — keyed off the
+      // actual rake wall there, NOT the bounding-box extremes, so it reaches the corner even when the eave wall
+      // isn't the outermost wall. Divider ends extend too, then get trimmed back by the BUTT loop below.
+      const capExtend=a=>{ const r=rakeFaces.find(rf=>Math.abs(rf.a-a)<1); return r?r.outer:a; };
+      // STEPPED knee walls — raise each a-running wall to the slope height yb(its c) (the lowest stays at H)
+      const kneeStudAs=[];   // a-positions of every knee stud, so the ceiling joists can bed BESIDE them on the plate
+      for(const w of aRun){ const yw=yb(w.c); if(yw<=H+pT+1) continue;
+        const cm=w.c+w.tc*t/2, a0=w.a0+0.75, a1=w.a1-0.75; if(a1-a0<1) continue;   // centre on the wall body
+        // the knee cap (upper roof plate) runs out to the rake wall's OUTER face at each end (the exterior corner),
+        // so it caps the corner post like the wall plate does below
+        let ca0 = capExtend(w.a0);
+        let ca1 = capExtend(w.a1);
+        // The eave top plate runs CONTINUOUSLY across an interior divider — it's the topmost eave plate (the 4x6
+        // divider beam sits just above it, the divider's sloped gable plate just below, so neither clips), so the
+        // caps from the two sides MEET over the divider instead of each butting its faces and leaving a gap between.
+        push('plate', sz, P3(ca0,cm,yw-pT/2), P3(ca1,cm,yw-pT/2), eaC);
+        const nn=Math.max(1,Math.ceil((a1-a0)/oc)), kk=(a1-a0)/nn;
+        for(let j=0;j<=nn;j++){ const av=a0+j*kk;
+          if((j===0||j===nn) && nearCorner(av, cm)) continue;        // an exterior OR middle corner post covers this end stud
+          if(sharedAGs.some(g=>Math.abs(av-g)<t/2+0.3)) continue;    // sits inside a divider beam → the divider's gable stud already fills this spot (don't double up / clip)
+          kneeStudAs.push(av); push('stud', sz, P3(av,cm,H), P3(av,cm,yw-pT), eaC); } }
+      // CEILING JOISTS — level 2x4 ties at H (flat drywall ceiling), one per rafter bay, bedding fully onto BOTH
+      // eave plates (out to each wall's OUTER face). Each joist is shifted in `a` to clear the knee studs so it
+      // sits on the plate BESIDE them instead of clipping through. Mirrors the gable roof's ceiling-joist ties.
+      const cjt=LUMBER['2x4'], studBad=p=>kneeStudAs.some(ka=>Math.abs(p-ka)<1.6);
+      const placeTie=ja=>{ const ce=footC(ja); if(ce && ce[1]-ce[0]>t) push('tie','2x4', P3(ja,ce[0],H+cjt.w/2), P3(ja,ce[1],H+cjt.w/2), eY); };
+      // slide a joist sideways so its FACE BUTTS the high-eave corner post it would run into (so it's nailed to the
+      // post, whole, no notch); `roomdir` is the into-the-room direction it shifts toward.
+      const buttCorner=(ja,roomdir)=>{ const fc=footC(ja); if(!fc) return ja; const hiC=fc[1]-1.75; let bestOv=0.1, tgt=ja;
+        for(const cs of members){ if(cs.role!=='corner') continue;
+          const csA=alongX?cs.start.x:cs.start.z, csC=alongX?cs.start.z:cs.start.x; if(Math.abs(csC-hiC)>2.5) continue;
+          const wa=alongX?Math.abs(cs.wide.x)>0.5:Math.abs(cs.wide.z)>0.5, half=wa?cjt.w/2:cjt.t/2;
+          const ov=Math.min(csA+half,ja+cjt.t/2)-Math.max(csA-half,ja-cjt.t/2);
+          if(ov>bestOv){ bestOv=ov; tgt=csA+roomdir*(half+cjt.t/2); } }   // bear the joist's face on the post's room-side face
+        return tgt; };
+      for(let k=0;k+1<valid.length;k++){ const a0=valid[k].a, a1=valid[k+1].a;
+        const gd=sharedAGs.find(g=>g>a0+0.5 && g<a1-0.5);   // a DIVIDER falls in this bay
+        if(gd!=null){   // → a joist each side of the divider, bumped OUT to BUTT the divider's high-eave corner posts
+          for(const side of [-1,1]) placeTie(buttCorner(gd+side*(A6.t/2+0.85), side));
+          continue; }
+        const lo=a0+1.6, hi=a1-1.6; if(hi<=lo) continue;
+        let ja=(a0+a1)/2;   // bay centre — inherently clear of both bounding rafters
+        if(studBad(ja)){ let best=null, mid=ja;   // a knee stud sits at centre → take the nearest clear spot in the bay
+          for(let p=lo;p<=hi;p+=0.5) if(!studBad(p) && (best===null||Math.abs(p-mid)<Math.abs(best-mid))) best=p;
+          if(best!==null) ja=best; }
+        placeTie(ja); }
+      // a corner-backing joist near each EXTERIOR rake (end) wall, moved IN to BUTT that corner's high-eave post
+      // (whole, no notch). fMin = wing/smaller room end, fMax = main/larger room end.
+      for(const e of [{a:fMin,dir:1},{a:fMax,dir:-1}]) placeTie(buttCorner(e.a+e.dir*0.85, e.dir));
+      // SUBFASCIA at each eave: a plumb fascia that sits just OUTBOARD of the rafter tails and BUTTS their
+      // plumb-cut ends (no clip/notch), with its TOP edge clipped to the roof plane (sloped) so a flat sheet
+      // of sheathing lays over rafters+fascia. Built as an extruded (c,y) profile, steps with the outline.
+      // an eave's run = its wall extent ± A.t/2 for the corner half-rafter (or the barge at rake-overhang ends),
+      // BUT clamp to the wall end (no overhang) where a shared beam sits at that end — the beam is the rake board
+      // there, so the fascia butts it instead of spilling a stub past it onto the next rectangle's slope.
+      const atBeam=a=>sharedAGs.some(g=>g-A6.t/2<=a+0.5 && g+A6.t/2>=a-0.5);
+      const eaves = aRun.map(w=>({ ec:w.c+w.tc*(t+ov), ecO:w.c+w.tc*(t+ov)+w.tc*1.5,
+        sa0: Math.abs(w.a0-fMin)<1 ? f0-ov-A.t/2 : (atBeam(w.a0)?w.a0:w.a0-A.t/2),
+        sa1: Math.abs(w.a1-fMax)<1 ? l0+ov+A.t/2 : (atBeam(w.a1)?w.a1:w.a1+A.t/2), caps:[] }));
+      // each beam-tail is CAPPED (end grain) by exactly ONE eave — the eave covering the beam, else the nearest
+      // one, which EXTENDS to reach (e.g. the deep eave stretching over a notch). That eave records it in `caps`.
+      for(const g of sharedAGs){ const ga0=g-A6.t/2, ga1=g+A6.t/2;
+        for(const ct of [cMin-ov, cMax+ov]){ const at=eaves.filter(E=>Math.abs(E.ec-ct)<2); if(!at.length) continue;
+          const E = at.find(e=>e.sa0<=g&&e.sa1>=g) || at.reduce((m,e)=>Math.abs((e.sa0+e.sa1)/2-g)<Math.abs((m.sa0+m.sa1)/2-g)?e:m);
+          E.sa0=Math.min(E.sa0,ga0); E.sa1=Math.max(E.sa1,ga1); E.caps.push(g); } }
+      for(const {ec,ecO,sa0,sa1,caps} of eaves){
+        const fp=[[ec,yb(ec)+vT],[ecO,yb(ecO)+vT],[ecO,yb(ec)],[ec,yb(ec)]];   // inner face at the tail; top on the roof plane
+        const fasc=(a0,a1)=>{ if(a1-a0>0.5) ePiece('subfascia', RF.rafterSize, (a0+a1)/2, fp, a1-a0, a1-a0); };
+        // BUTT (split around) every beam this eave does NOT cap and whose width overlaps this run — so a
+        // non-capping eave butts the beam's SIDE instead of clipping into it; the capping eave stays whole.
+        const cuts = sharedAGs.filter(g=> !caps.includes(g) && g-A6.t/2<sa1-0.5 && g+A6.t/2>sa0+0.5).sort((a,b)=>a-b);
+        let st=sa0;
+        for(const g of cuts){ fasc(st, g-A6.t/2); st=Math.max(st, g+A6.t/2); }
+        fasc(st, sa1); }
+      // RAKE-WALL infill — sloped rake plate + mitered studs (H → rafter underside) on every wall ACROSS a
+      const cRun=[];   // `ta` = a-component of T → points into the wall body
+      F.forEach(f=>{ const dc=alongX?f.D.z:f.D.x;
+        if(Math.abs(dc)>0.7){ const q0=alongX?f.O.z:f.O.x, q1=q0+dc*f.len;
+          cRun.push({a:+(alongX?f.O.x:f.O.z).toFixed(2), c0:Math.min(q0,q1), c1:Math.max(q0,q1), ta:(alongX?-f.D.z:f.D.x)}); } });
+      for(const w of cRun){ const aG=w.a+w.ta*t/2, cLo=w.c0+0.75, cHi=w.c1-0.75; if(cHi-cLo<2) continue;   // on the wall body
+        // where the rake plate's top edge (yb) / bottom edge (yb−drop) die into the WALL top plate H — the gable
+        // studs now seat DIRECTLY on the double top plate (no separate bottom gable plate):
+        const cFeather=cLowI, vX=cLowI+drop/mm;
+        const eaveEnd = yb(cLo)<yb(cHi)?cLo:cHi, highEnd = yb(cLo)<yb(cHi)?cHi:cLo;
+        const mitered = yb(eaveEnd) < H+drop-0.01;   // the eave end runs into the taper → MITER it to a feather
+        // extend the rake plate to the wall EDGE (= the knee cap's inner face) wherever an end sits at a raised
+        // knee, so the gable plate BUTTS the upper plate (closes the 0.75" inset gap) — NOT past the corner.
+        const edgeKnee = e=>aRun.find(kn=>Math.abs(kn.c-e)<1.5 && w.a>=kn.a0-1.5 && w.a<=kn.a1+1.5 && yb(kn.c)>H+pT+2);
+        const hiEdge = highEnd===cHi?w.c1:w.c0, loEdge = eaveEnd===cLo?w.c0:w.c1;
+        const hiP = edgeKnee(hiEdge)?hiEdge:highEnd, loK = edgeKnee(loEdge), loP = loK?loEdge:eaveEnd;
+        const useMiter = mitered && !loK;
+        // sloped rake (top) plate riding the rafter underside; LOW end mitered down to meet the top plate
+        const rakePts = useMiter
+          ? [[cFeather,H],[hiP,yb(hiP)],[hiP,yb(hiP)-drop],[vX,H]]
+          : [[loP,yb(loP)],[hiP,yb(hiP)],[hiP,yb(hiP)-drop],[loP,yb(loP)-drop]];
+        ePiece('gable', sz, aG, rakePts, t, Math.hypot(hiP-(useMiter?cFeather:loP), yb(hiP)-(useMiter?H:yb(loP))));
+        // NO bottom gable plate — the wall's double top plate IS the bottom plate; gable studs seat directly on it
+        // gable studs seated DIRECTLY on the wall's double top plate (H) up to the rake-plate underside
+        for(let c=cHi-0.75; c>cLo+0.75; c-=oc){ const tL=yb(c-0.75)-drop, tR=yb(c+0.75)-drop;
+          if(Math.min(tL,tR)>H+1) ePiece('gable', sz, aG, [[c-0.75,H],[c+0.75,H],[c+0.75,tR],[c-0.75,tL]], t, (tL+tR)/2-H); } }
+      // ROOF corners: continue the WALL corner post straight up at EVERY corner vertex (exterior AND the interior
+      // shared-wall ends — e.g. the middle corner). Replicate each wall corner/partition stud near the vertex
+      // (same world x/z + orientation) from H to the rafter underside, so the roof corner is the same post as below.
+      const wallCornerStuds = members.filter(m=>m.role==='corner' && !m.geo);  // SNAPSHOT before we push new ones
+      for(const v of cornerVerts){ const cv=P3(v.a,v.c,0);                    // the building-corner vertex (world)
+        const capBot=yb(v.c)-pT;                                              // the knee cap's underside at this corner
+        for(const m of wallCornerStuds){
+          if(Math.hypot(m.start.x-cv.x, m.start.z-cv.z)>5) continue;          // this corner's posts only
+          // cap ALL corner-post studs FLAT at the eave-cap underside (yb(v.c)−pT) — the eave top plate laps over
+          // the whole corner post (so no stud top is left exposed under the sloped rake plate at the corner).
+          const cc=alongX?m.start.z:m.start.x, top=capBot;
+          if(top>H+1) push('corner', sz, new THREE.Vector3(m.start.x,H,m.start.z),
+                            new THREE.Vector3(m.start.x,top,m.start.z), m.wide.clone());
+        }
+      }
+      return;
+    }
+
+    // a shed rafter: birdsmouth at BOTH walls + overhang tails (birds=true), OR a straight barge
+    // (birds=false). notchCs cuts lookout notches into the TOP edge (only the END/rake rafters get them).
+    const shedRafter=(a, birds, notchCs)=>{
+      const bottom = birds
+        ? [[cLowEave,yb(cLowEave)],[cLowO,yb(cLowO)],[cLowO,H],[cLowI,H],[cHighI,Hhigh],[cHighO,Hhigh],[cHighO,yb(cHighO)],[cHighEave,yb(cHighEave)]]
+        : [[cLowEave,yb(cLowEave)],[cHighEave,yb(cHighEave)]];
+      const top=[[cHighEave,yt(cHighEave)]];
+      if(notchCs) for(const cl of notchCs.slice().sort((p,q)=> td>0? p-q : q-p)){   // along the top edge (high→low eave)
+        const hw=1.75/Lf, dc=mm/Lf*1.5, dy=-1.5/Lf, en=cl-td*hw, lv=cl+td*hw;
+        top.push([en,yt(en)],[en+dc,yt(en)+dy],[lv+dc,yt(lv)+dy],[lv,yt(lv)]);
+      }
+      top.push([cLowEave,yt(cLowEave)]);
+      ePiece('rafter', RF.rafterSize, a, bottom.concat(top), A.t, rLen);
+    };
+    // evenly spaced, symmetric rafters along a (real rafter at each side wall); END rafters get notches
+    const nBays=Math.max(1, Math.ceil((aMax-aMin)/oc)), span=(aMax-aMin)/nBays, stations=[];
+    for(let i=0;i<=nBays;i++) stations.push(aMin+i*span);
+    const lookCs=[1,2,3,4,5].map(k=>cMin+(cMax-cMin)*k/6);   // lookout c-stations down the single slope
+    const notchSet=new Set([aMin,aMax].map(x=>+x.toFixed(3)));
+    for(const a of stations) shedRafter(a, true, notchSet.has(+a.toFixed(3))?lookCs:null);
+    // RAKE overhang: barge (fly) rafters + roof-plane LOOKOUTS (barge → notched end rafter → 2nd rafter)
+    for(const a of [aMin-ov, aMax+ov]) shedRafter(a, false, null);
+    { const wideV=new THREE.Vector3().copy(eaC).multiplyScalar(1/Lf).addScaledVector(eY, mm/Lf);
+      for(const g of [{wall:aMin,dir:1},{wall:aMax,dir:-1}]){
+        const e0=(g.wall-g.dir*ov)+g.dir*A.t/2, e1=(g.wall+g.dir*span)-g.dir*A.t/2;   // barge inner face → 2nd rafter
+        const a0=Math.min(e0,e1), a1=Math.max(e0,e1); if(a1-a0<1) continue;
+        for(const cl of lookCs){ const cc=cl+0.75*mm/Lf, yy=yt(cl)-0.75/Lf;
+          push('lookout','2x4', P3(a0,cc,yy), P3(a1,cc,yy), wideV); }
+      }
+    }
+
+    // HIGH KNEE WALL — raise the high wall (cMax side) from H up to Hhigh so the rafters bear on it.
+    // Cap plate runs CORNER TO CORNER (aMin..aMax) over the high wall; the end studs are flush with the
+    // side-wall exteriors so each end stud + the cap plate above it form a clean exterior right angle.
+    const cHighMid=(cHighO+cHighI)/2;   // high-wall centreline in c (cMax-t/2, or cMin+t/2 when flipped)
+    push('plate', sz, P3(aMin, cHighMid, Hhigh-pT/2), P3(aMax, cHighMid, Hhigh-pT/2), eaC);   // knee cap plate (full length)
+    const kw0=aMin+0.75, kw1=aMax-0.75, nk=Math.max(1, Math.ceil((kw1-kw0)/oc)), ks=(kw1-kw0)/nk, kneeStudAs=[];
+    for(let i=0;i<=nk;i++){ const a=kw0+i*ks; kneeStudAs.push(a); push('stud', sz, P3(a, cHighMid, H), P3(a, cHighMid, Hhigh-pT), eaC); }
+    // CEILING JOISTS — level 2x4 ties at H (flat drywall ceiling), one per rafter bay, bedding fully onto BOTH
+    // eave plates (out to each wall's OUTER face), each shifted in `a` to clear the high-wall knee studs so it
+    // sits on the plate BESIDE them rather than clipping through. Mirrors the gable roof's ceiling-joist ties.
+    const cjt=LUMBER['2x4'], obAs=kneeStudAs.concat(stations);   // shift clear of knee studs AND rafters
+    for(const a of stations){ if(a<=aMin+1e-6 || a>=aMax-1e-6) continue;   // the side (rake) walls carry infill, not a joist
+      let ja=a+(A.t/2+0.75);
+      for(let p=0;p<6;p++) for(const ka of obAs) if(Math.abs(ja-ka)<1.6) ja=ka+(ja>=ka?1.6:-1.6);
+      ja=Math.max(aMin+0.8, Math.min(aMax-0.8, ja));
+      push('tie','2x4', P3(ja,cMin,H+cjt.w/2), P3(ja,cMax,H+cjt.w/2), eY); }
+
+    // SIDE-WALL (rake) infill — a sloped rake plate following the end rafter + mitered infill studs,
+    // at each side wall, filling from the wall top (H) up to the rafter underside (single ramp).
+    const cR0=cMin+t, cR1=cMax-t;
+    for(const g of [{wall:aMin,dir:1},{wall:aMax,dir:-1}]){
+      const aG=g.wall+g.dir*(t/2);
+      ePiece('gable', sz, aG, [[cR0,yb(cR0)],[cR1,yb(cR1)],[cR1,yb(cR1)-drop],[cR0,yb(cR0)-drop]], t,
+             Math.hypot(cR1-cR0, yb(cR1)-yb(cR0)));
+      // studs kept fully WITHIN the rake plate (cR0..cR1) so the plate caps every stud incl. the tallest
+      for(let c=cR1-0.75; c>cR0+0.75; c-=oc){ const tL=yb(c-0.75)-drop, tR=yb(c+0.75)-drop;
+        if(Math.min(tL,tR) > H+1) ePiece('gable', sz, aG, [[c-0.75,H],[c+0.75,H],[c+0.75,tR],[c-0.75,tL]], t, (tL+tR)/2-H); }
+    }
+
+    // SUBFASCIA across the rafter tails at the LOW & HIGH eaves (runs to the barge outer faces, flush rake)
+    for(const e of [{c:cMin-ov,dir:-1},{c:cMax+ov,dir:1}])
+      push('subfascia', RF.rafterSize, P3(aMin-ov-A.t/2, e.c+e.dir*0.75, yb(e.c)+vT/2), P3(aMax+ov+A.t/2, e.c+e.dir*0.75, yb(e.c)+vT/2), eY, {xsec:{t:1.5,w:vT}});
+    return;
+  }
+
+  // bottom slope-line of each side, anchored so the birdsmouth SEAT sits on the plate top (y=H over
+  // the plate width t). Both sides reach the same height at the ridge faces (symmetry).
+  const ybLo = c => H + (c-(cMin+t))*slope;   // low-c slope (=H at inner plate edge cMin+t)
+  const ybHi = c => H + ((cMax-t)-c)*slope;   // high-c slope
+  const ridgeBotY = ybLo(cMid-rt/2), ridgeTopY = ridgeBotY + vT;
+
+  // a CUT rafter as an extruded profile in the (c,y) plane at station `a`. side 'lo'|'hi';
+  // birds=true adds the birdsmouth seat/heel notch (common rafters); false = straight bottom (barge).
+  // notchCs (optional) = c-centres of LOOKOUT notches cut into the TOP edge (gable & 2nd rafters) —
+  // each 3.5" along the slope × 1.5" deep ⟂ the roof, so a roof-plane lookout drops in flush.
+  function cutRafter(a, side, birds, notchCs){
+    const lo = side==='lo', yb = lo?ybLo:ybHi, m = lo? slope : -slope, yt = c=>yb(c)+vT;
+    const cEave  = lo? cMin-ov  : cMax+ov;
+    const cHeel  = lo? cMin     : cMax;       // outer wall face → heel plumb cut
+    const cSeat  = lo? cMin+t   : cMax-t;     // inner plate edge → seat
+    const cRidge = lo? cMid-rt/2: cMid+rt/2;  // ridge near face → plumb cut
+    const bottom = birds
+      ? [[cEave,yb(cEave)],[cHeel,yb(cHeel)],[cHeel,H],[cSeat,H],[cRidge,yb(cRidge)]]
+      : [[cEave,yb(cEave)],[cRidge,yb(cRidge)]];
+    const top=[[cRidge,yt(cRidge)]];          // top edge ridge→eave, dipping into each lookout notch
+    if(notchCs) for(const cl of notchCs.slice().sort((p,q)=> lo? q-p : p-q)){
+      const hw=1.75/Lf, dc=m/Lf*1.5, dy=-1.5/Lf, cA=lo?cl+hw:cl-hw, cB=lo?cl-hw:cl+hw;
+      top.push([cA,yt(cA)],[cA+dc,yt(cA)+dy],[cB+dc,yt(cB)+dy],[cB,yt(cB)]);
+    }
+    top.push([cEave,yt(cEave)]);
+    let pts=bottom.concat(top), area=0;
+    for(let i=0;i<pts.length;i++){const p=pts[i],q=pts[(i+1)%pts.length]; area+=p[0]*q[1]-q[0]*p[1];}
+    if(area<0) pts.reverse();
+    const sh=new THREE.Shape(); pts.forEach((p,i)=> i?sh.lineTo(p[0],p[1]):sh.moveTo(p[0],p[1])); sh.closePath();
+    const geo=new THREE.ExtrudeGeometry(sh,{depth:A.t,bevelEnabled:false,steps:1}); geo.translate(0,0,-A.t/2); geo.computeVertexNormals();
+    const xf=new THREE.Matrix4().makeBasis(eaC,eY,enA); xf.setPosition(P3(a,0,0));
+    members.push({role:'rafter', size:RF.rafterSize, kind:'roof', geo, xf,
+      start:P3(a,cEave,yb(cEave)+vT/2), end:P3(a,cRidge,yb(cRidge)+vT/2),
+      len:Math.hypot(cRidge-cEave, yb(cRidge)-yb(cEave)), notches:[]});
+  }
+
+  // common rafters EVENLY SPACED (≤ o.c.) and SYMMETRIC about the centre — real rafters at both gable
+  // walls and an equal `span` between every pair, so lookouts land on real rafters on BOTH ends.
+  const oc = Math.max(8, RF.rafterOC||16), half=(cMax-cMin)/2;
+  const nBays = Math.max(1, Math.ceil((aMax-aMin)/oc)), span=(aMax-aMin)/nBays, stations=[];
+  for(let i=0;i<=nBays;i++) stations.push(aMin + i*span);
+  const lookCsLo=[0.25,0.5,0.75].map(f=>cMin+half*f), lookCsHi=[0.25,0.5,0.75].map(f=>cMax-half*f);
+  const notchSet=new Set([aMin, aMax].map(x=>+x.toFixed(3)));   // ONLY the middle (gable) rafter is notched
+  for(const a of stations){ const n=notchSet.has(+a.toFixed(3));
+    cutRafter(a,'lo',true, n?lookCsLo:null); cutRafter(a,'hi',true, n?lookCsHi:null); }
+
+  // ridge board — reaches the BARGE (last) rafters' outer faces so the final rafters meet it at the apex
+  push('ridge', RF.rafterSize, P3(aMin-ov-A.t/2,cMid,(ridgeBotY+ridgeTopY)/2), P3(aMax+ov+A.t/2,cMid,(ridgeBotY+ridgeTopY)/2), eY);
+
+  // barge (fly) rafters at the overhang edge (no birdsmouth, no notch)
+  for(const a of [aMin-ov, aMax+ov]){ cutRafter(a,'lo',false); cutRafter(a,'hi',false); }
+  // LOOKOUTS — 2x4 laid flat IN THE ROOF PLANE (matching the rafter angle), top flush with the rafter
+  // tops: from the barge rafter's inner face, through the notched gable rafter, into the notched 2nd
+  // rafter. A few stepped down each slope; NEVER on the ridge.
+  for(const g of [{wall:aMin, dir:1}, {wall:aMax, dir:-1}]){
+    const e0=(g.wall-g.dir*ov)+g.dir*A.t/2, e1=(g.wall+g.dir*span)-g.dir*A.t/2;   // BUTT both: barge inner face → 2nd rafter outer face (only the gable rafter between is notched)
+    const a0=Math.min(e0,e1), a1=Math.max(e0,e1); if(a1-a0 < 1) continue;
+    for(const sd of [{cs:lookCsLo,m:slope,yb:ybLo},{cs:lookCsHi,m:-slope,yb:ybHi}]){
+      const wideV=new THREE.Vector3().copy(eaC).multiplyScalar(1/Lf).addScaledVector(eY, sd.m/Lf);  // along the slope
+      for(const cl of sd.cs){
+        const cc=cl+0.75*sd.m/Lf, yy=(sd.yb(cl)+vT)-0.75/Lf;    // centroid in the roof plane (top flush, 1.5" deep)
+        push('lookout','2x4', P3(a0,cc,yy), P3(a1,cc,yy), wideV);
+      }
+    }
+  }
+
+  // ceiling joists / rafter ties at the plate (resist outward thrust); offset along the ridge so each
+  // abuts its rafter's face instead of interpenetrating it (kept inside the gable ends).
+  const jt = LUMBER['2x4'];
+  for(const a of stations){
+    if(a<=aMin+1e-6 || a>=aMax-1e-6) continue;   // gable ends carry the gable wall, not a ceiling joist
+    let ja = a + (rt/2 + 0.75); if(ja > aMax-0.75) ja = a - (rt/2 + 0.75);
+    push('tie', '2x4', P3(ja,cMin,H+jt.w/2), P3(ja,cMax,H+jt.w/2), eY);
+  }
+
+  // GABLE-END framing — a horizontal bottom GABLE PLATE on the gable wall's top plate, two sloped TOP
+  // gable plates (parallelogram profiles with PLUMB ends that MEET AT THE APEX, top face on the rafter
+  // underside), and MITERED gable STUDS whose tops follow the top-plate underside. At each gable end.
+  if(slope>0.01){
+    const sz=P.wall.size, ybG = c => c<=cMid? ybLo(c) : ybHi(c), drop = pT*Lf;   // drop = vertical span of a slope-plane plate
+    const cGLo = cMin+t + pT/slope, cGHi = cMax-t - pT/slope;   // where the rafter underside clears H+pT
+    // an extruded gable piece from a (c,y) profile, t deep in a, centred at aG (same render path as rafters)
+    const gPiece=(aG,pts,len)=>{
+      let area=0; for(let i=0;i<pts.length;i++){const p=pts[i],q=pts[(i+1)%pts.length]; area+=p[0]*q[1]-q[0]*p[1];}
+      if(area<0) pts.reverse();
+      const sh=new THREE.Shape(); pts.forEach((p,i)=> i?sh.lineTo(p[0],p[1]):sh.moveTo(p[0],p[1])); sh.closePath();
+      const geo=new THREE.ExtrudeGeometry(sh,{depth:t,bevelEnabled:false,steps:1}); geo.translate(0,0,-t/2); geo.computeVertexNormals();
+      const cs=pts.map(p=>p[0]), ys=pts.map(p=>p[1]), cc=(Math.min(...cs)+Math.max(...cs))/2;
+      let edgeMax=0; for(let i=0;i<pts.length;i++){const p=pts[i],q=pts[(i+1)%pts.length]; edgeMax=Math.max(edgeMax,Math.hypot(p[0]-q[0],p[1]-q[1]));}
+      members.push({role:'gable', size:sz, kind:'roof', geo, xf:new THREE.Matrix4().makeBasis(eaC,eY,enA).setPosition(P3(aG,0,0)),
+        start:P3(aG,cc,Math.min(...ys)), end:P3(aG,cc,Math.max(...ys)), len:Math.max(t, edgeMax), notches:[]});
+    };
+    for(const g of [{wall:aMin, dir:1}, {wall:aMax, dir:-1}]){
+      const aG = g.wall + g.dir*(t/2);            // gable wall centreline (flush exterior → interior)
+      if(cGHi-cGLo < 1) continue;
+      // NO bottom gable plate — the wall's double top plate IS the bottom plate; gable studs seat directly on it
+      // top (rake) plates — parallelograms with PLUMB ends; both reach the apex c=cMid and meet there
+      for(const s of [{yb:ybLo, c0:cGLo}, {yb:ybHi, c0:cGHi}])
+        gPiece(aG, [[s.c0,s.yb(s.c0)],[cMid,s.yb(cMid)],[cMid,s.yb(cMid)-drop],[s.c0,s.yb(s.c0)-drop]],
+               Math.hypot(cMid-s.c0, s.yb(cMid)-s.yb(s.c0)));
+      // gable studs (symmetric about the apex) with MITERED tops following the top-plate underside
+      const cs=[cMid]; for(let d=oc; cMid-d>cGLo+0.75; d+=oc) cs.push(cMid-d, cMid+d);   // keep studs within the top plates
+      for(const c of cs){ const tL=ybG(c-0.75)-drop, tR=ybG(c+0.75)-drop;
+        if(Math.min(tL,tR) > H+1) gPiece(aG, [[c-0.75,H],[c+0.75,H],[c+0.75,tR],[c-0.75,tL]], (tL+tR)/2-H); }
+    }
+  }
+
+  // SUBFASCIA — a board nailed across the plumb-cut rafter tails along each eave (top flush with the
+  // rafter tops, full plumb-cut depth so it covers the tail). The rake is the barge rafter itself.
+  for(const s of [{c:cMin-ov, dir:-1, yb:ybLo}, {c:cMax+ov, dir:1, yb:ybHi}]){
+    const cc=s.c + s.dir*0.75, yy=s.yb(s.c)+vT/2;   // 1.5" thick, inner face on the tail line
+    // run to the barge rafters' OUTER faces so the eave subfascia ends flush with the rake (final rafter)
+    push('subfascia', RF.rafterSize, P3(aMin-ov-A.t/2,cc,yy), P3(aMax+ov+A.t/2,cc,yy), eY, {xsec:{t:1.5,w:vT}});
+  }
+
+  // COLLAR TIES — connect opposing rafter pairs in the UPPER THIRD (resist ridge separation/uplift);
+  // 2x4 on edge, every other interior rafter, offset along the ridge to abut the rafter faces.
+  if(slope>0.01){
+    // Keep collar ties CLEAR of the ceiling joists on low slopes: place at the usual ⅔ height, but lift them so
+    // their underside stays ≥1" above the joist tops. If even lifted they can't tuck under the ridge with a usable
+    // run (the slope is just too shallow), omit them rather than let them clip the joists.
+    const cw=LUMBER['2x4'].w, tieTop=H+cw;                          // ceiling-joist top (2x4 on edge, on the plate)
+    const yC=Math.max(H+(2/3)*(ridgeBotY-H), tieTop+1+cw/2);
+    const cCLo=(cMin+t)+(yC-H)/slope, cCHi=(cMax-t)-(yC-H)/slope;
+    if(yC+cw/2 <= ridgeBotY-0.5 && cCHi-cCLo>12){                   // still fits under the ridge with a real run
+      for(let i=0;i<stations.length;i++){ const a=stations[i];
+        if(a<=aMin+1e-6 || a>=aMax-1e-6 || i%2===0) continue;   // interior rafters, every other
+        push('collar','2x4', P3(a+1.5,cCLo,yC), P3(a+1.5,cCHi,yC), eY);
+      }
+    }
+  }
+}
+
+/* ===== THREE.js scene + mesh pipeline =====
+   `group` holds every rendered object; render3D() rebuilds it from members[].
+   Materials are cached per role (mat/ghostMat/hwMat) so we don't allocate one per
+   member each frame. showEdges/ghost are view toggles; hidden/selectedMi drive
+   per-piece hide + click highlighting (keyed by member INDEX, so any rebuild via
+   regen() resets them — indices are only stable within one build). */
+let scene,camera,renderer,group,raf;
+let showEdges=true, ghost=false;
+let hidden=new Set(), selectedMi=-1;     // per-piece hide + click-selected member index
+const selMat=new THREE.MeshStandardMaterial({color:0xffd24a, emissive:0x5a3d00, metalness:0.1, roughness:0.5, side:THREE.DoubleSide});       // the rest of the selected wall (gold)
+const pickMat=new THREE.MeshStandardMaterial({color:0xfff7d6, emissive:0xffc233, emissiveIntensity:1.15, metalness:0.1, roughness:0.3, side:THREE.DoubleSide}); // the clicked piece (brighter, glows)
+const matCache={};
+function mat(role){
+  if(!matCache[role]) matCache[role]=new THREE.MeshStandardMaterial({color:COLORS[role],metalness:0.05,roughness:0.75});
+  return matCache[role];
+}
+const ghostCache={}, hwCache={};
+function ghostMat(role){ if(!ghostCache[role]) ghostCache[role]=new THREE.MeshStandardMaterial({color:COLORS[role],transparent:true,opacity:0.32,metalness:0.05,roughness:0.8}); return ghostCache[role]; }
+function hwMat(type){ if(!hwCache[type]) hwCache[type]=new THREE.MeshStandardMaterial({color:HWCOL[type],metalness:type==='dowel'?0.05:0.7,roughness:type==='dowel'?0.7:0.3}); return hwCache[type]; }
+const edgeMat=new THREE.LineBasicMaterial({color:0x120d08,transparent:true,opacity:0.5});
+
+// memberBasis(m) — orthonormal local frame for a member: ex = length axis
+// (start→end), ey = width axis (m.wide, re-orthogonalised), ez = thickness axis
+// (ex×ey), plus mid = centre point. Used to orient/position its box mesh.
+function memberBasis(m){
+  const ex=new THREE.Vector3().subVectors(m.end,m.start); if(ex.lengthSq()<1e-9) ex.set(1,0,0); ex.normalize();
+  let ey=m.wide.clone(); ey.addScaledVector(ex,-ex.dot(ey)); if(ey.lengthSq()<1e-6) ey.set(0,1,0); ey.normalize();
+  const ez=new THREE.Vector3().crossVectors(ex,ey).normalize();
+  const mid=new THREE.Vector3().addVectors(m.start,m.end).multiplyScalar(0.5);
+  return {ex,ey,ez,mid};
+}
+// split a member into sub-boxes so dado/lap NOTCHES show as real removed material (no CSG)
+function memberSubBoxes(m){
+  const A=m.xsec||LUMBER[m.size], len=Math.max(0.01,m.len), {ez}=memberBasis(m);
+  const ns=(m.notches||[]).filter(n=>n.depth>0)
+    .map(n=>({u:n.u,len:n.len,depth:Math.min(n.depth,A.t-0.2), face:Math.sign(n.faceDir.dot(ez))||1}));
+  if(!ns.length) return [{cx:0,l:len,w:A.w,t:A.t,oz:0}];
+  const bp=new Set([0,len]); ns.forEach(n=>{ bp.add(Math.max(0,n.u-n.len/2)); bp.add(Math.min(len,n.u+n.len/2)); });
+  const xs=[...bp].sort((a,b)=>a-b), out=[];
+  for(let i=0;i<xs.length-1;i++){ const s0=xs[i],s1=xs[i+1]; if(s1-s0<1e-3) continue; const mid=(s0+s1)/2;
+    let t=A.t, oz=0; const n=ns.find(n=> mid>=n.u-n.len/2-1e-6 && mid<=n.u+n.len/2+1e-6);
+    if(n){ t=A.t-n.depth; oz=n.face*(-(A.t-t)/2); }
+    out.push({cx:(s0+s1)/2-len/2, l:s1-s0, w:A.w, t, oz}); }
+  return out;
+}
+const EPS=0.03;   // shrink members a hair so butted/bearing faces never perfectly coincide (kills z-fighting)
+// memMesh(m, hiMat) — turn one member into a THREE.Group of box mesh(es) (+ edge
+// lines if showEdges). Mitered braces use their prebuilt extruded geo; everything
+// else is built from memberSubBoxes (so notches show) with the EPS end/cross-
+// section shrink to avoid z-fighting at butt joints.
+function memMesh(m, hiMat){                           // hiMat: highlight material (pickMat/selMat) or null
+  if(m.geo){                                         // prebuilt extruded profile (mitered brace, cut rafter, etc.)
+    const g=new THREE.Group();
+    const mt = hiMat || (ghost?ghostMat(m.role):mat(m.role)); if(!hiMat) mt.side=THREE.DoubleSide;
+    const mesh=new THREE.Mesh(m.geo, mt); mesh.applyMatrix4(m.xf); g.add(mesh);
+    if(showEdges){ const eg=new THREE.LineSegments(new THREE.EdgesGeometry(m.geo), edgeMat); eg.applyMatrix4(m.xf); g.add(eg); }
+    return g;
+  }
+  const {ex,ey,ez,mid}=memberBasis(m), len=Math.max(0.01,m.len);
+  const basis=new THREE.Matrix4().makeBasis(ex,ey,ez), g=new THREE.Group();
+  memberSubBoxes(m).forEach(sb=>{
+    // trim only the member's TRUE ends (not internal lap-notch cuts) + the cross-section
+    let l=sb.l, cx=sb.cx;
+    if(Math.abs((cx-l/2)+len/2) < 1e-3){ l-=EPS; cx+=EPS/2; }   // left end is the member end
+    if(Math.abs((cx+l/2)-len/2) < 1e-3){ l-=EPS; cx-=EPS/2; }   // right end is the member end
+    const geo=new THREE.BoxGeometry(Math.max(0.02,l), Math.max(0.05,sb.w-2*EPS), Math.max(0.05,sb.t-2*EPS));
+    const mesh=new THREE.Mesh(geo, hiMat || (ghost?ghostMat(m.role):mat(m.role)));
+    mesh.applyMatrix4(basis);
+    mesh.position.copy(mid).addScaledVector(ex,cx).addScaledVector(ez,sb.oz);
+    g.add(mesh);
+    if(showEdges){ const eg=new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat); eg.applyMatrix4(basis); eg.position.copy(mesh.position); g.add(eg); }
+  });
+  return g;
+}
+// fastener / connector hardware
+function hardwareMesh(h){
+  const dir=h.dir.clone().normalize();
+  if(h.type==='bracket'){
+    const m=new THREE.Mesh(new THREE.BoxGeometry(2.4,2.4,0.14), hwMat('bracket'));
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0,0,1), dir);
+    m.position.copy(h.pos).addScaledVector(dir,0.08); return m;
+  }
+  // cylindrical fastener: shaft embedded INTO the receiver, small head proud at the face
+  const g=new THREE.Group(), q=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), dir);
+  const shaft=new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.1,1.4,10), hwMat('pin'));
+  shaft.quaternion.copy(q); shaft.position.copy(h.pos).addScaledVector(dir,0.5);   // spans ~0.2 proud → 1.2 in
+  const head=new THREE.Mesh(new THREE.CylinderGeometry(0.19,0.19,0.16,12), hwMat('pin'));
+  head.quaternion.copy(q); head.position.copy(h.pos).addScaledVector(dir,-0.06);
+  g.add(shaft,head); return g;
+}
+// initThree() — one-time WebGL setup: renderer, scene, perspective camera, two
+// directional lights + ambient, the root `group`, orbit controls, and the render
+// loop. Called once at boot.
+function initThree(){
+  const cv=$('#gl');
+  renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true});
+  renderer.setPixelRatio(Math.min(2,devicePixelRatio));
+  scene=new THREE.Scene();
+  camera=new THREE.PerspectiveCamera(45,1,1,5000);
+  scene.add(new THREE.AmbientLight(0xffffff,0.62));
+  const d=new THREE.DirectionalLight(0xffffff,0.85); d.position.set(0.6,1,0.4); scene.add(d);
+  const d2=new THREE.DirectionalLight(0xffffff,0.35); d2.position.set(-0.5,0.3,-0.6); scene.add(d2);
+  group=new THREE.Group(); scene.add(group);
+  resize(); window.addEventListener('resize',resize);
+  initOrbit(cv);
+  (function loop(){ raf=requestAnimationFrame(loop); renderer.render(scene,camera); })();
+}
+// resize() — match the drawing buffer to #main's pixel size and fix the aspect.
+// NOTE: the canvas MUST keep its CSS width/height:100% (see <style>); setSize(.,.,
+// false) only sets the buffer, not the element style, so without the CSS rule the
+// canvas renders at device-pixel size and overflows the layout on HiDPI screens.
+function resize(){ const m=$('#main'); renderer.setSize(m.clientWidth,m.clientHeight,false);
+  camera.aspect=m.clientWidth/m.clientHeight; camera.updateProjectionMatrix(); }
+
+/* orbit camera — a simple spherical-coordinate orbit (no OrbitControls dependency).
+   `view` holds azimuth/elevation/distance + look-at target; applyCam() converts it
+   to a camera position. */
+const view={az:-0.7, el:0.5, dist:120, target:new THREE.Vector3()};
+function applyCam(){
+  const {az,el,dist,target}=view;
+  camera.position.set(target.x+dist*Math.cos(el)*Math.sin(az),
+                      target.y+dist*Math.sin(el),
+                      target.z+dist*Math.cos(el)*Math.cos(az));
+  camera.lookAt(target);
+}
+// frame() — fit the camera to the current model: centre the orbit target on the
+// scene's bounding box and back off enough to see it. Bound to "Reset view".
+function frame(){
+  const box=new THREE.Box3().setFromObject(group);
+  if(box.isEmpty()) return;
+  box.getCenter(view.target);
+  const sz=box.getSize(new THREE.Vector3());
+  view.dist=Math.max(sz.x,sz.y,sz.z)*1.9+30;
+  applyCam();
+}
+// wallName(k) — the user-given name for wall k, or the default "Wall k+1".
+function wallName(k){ const w=P.wall&&P.wall.walls&&P.wall.walls[k]; return (w&&w.name&&w.name.trim())||('Wall '+(k+1)); }
+// opening position helpers — o.x is the ABSOLUTE distance from the wall start to the opening's LEFT edge (what
+// buildWall frames from); the UI shows/edits it relative to o.ref: 'start' (from the start), 'end' (from the far
+// end), or 'center' (offset of the opening centre from the wall centre, 0 = centred). openPos→display, openX→store.
+function openPos(o, L){ const r=o.ref||'start', w=o.w||0; return r==='end'? L-(o.x+w) : r==='center'? (o.x+w/2)-L/2 : o.x; }
+function openX(o, L, v){ const r=o.ref||'start', w=o.w||0; return Math.max(0, r==='end'? L-v-w : r==='center'? L/2+v-w/2 : v); }
+// faceWall(i) — swing the orbit camera SQUARE-ON to wall i (elevation-style) for editing it head-on.
+function faceWall(i){
+  const F=wallFrames(), f=F&&F[i]; if(!f) return;
+  const C=f.O.clone().addScaledVector(f.D, f.len/2);                  // wall mid-length (floor level)
+  const G=new THREE.Vector3(); F.forEach(ff=>G.add(ff.O.clone().addScaledVector(ff.D,ff.len/2))); G.multiplyScalar(1/Math.max(1,F.length));
+  let n=new THREE.Vector3(f.D.z,0,-f.D.x);                            // horizontal normal of the wall plane
+  if(n.lengthSq()<1e-6) n.set(0,0,1); else n.normalize();
+  if(n.dot(C.clone().sub(G))<0) n.negate();                          // point OUTWARD (away from the building centre)
+  view.target.set(C.x, (P.wall.height||96)/2, C.z);                 // look at the wall's middle
+  view.az=Math.atan2(n.x,n.z); view.el=0.12;                        // face the wall, a hair above level
+  view.dist=Math.max(f.len, P.wall.height||96)*1.25+40;
+  applyCam(); render3D();
+}
+// initOrbit(cv) — wire mouse drag (orbit), shift/right-drag (pan) and wheel (zoom)
+// to `view`. A drag that moves <5px on mouseup is treated as a CLICK → handlePick
+// (so dragging the camera never accidentally selects a piece).
+function initOrbit(cv){
+  let mode=null,lx=0,ly=0,moved=0;
+  cv.addEventListener('mousedown',e=>{ mode=(e.button===0&&!e.shiftKey)?'orbit':'pan'; lx=e.clientX;ly=e.clientY; moved=0; e.preventDefault(); });
+  cv.addEventListener('contextmenu',e=>e.preventDefault());
+  window.addEventListener('mousemove',e=>{ if(!mode)return; const dx=e.clientX-lx,dy=e.clientY-ly; lx=e.clientX;ly=e.clientY; moved+=Math.abs(dx)+Math.abs(dy);
+    if(mode==='orbit'){ view.az-=dx*0.01; view.el=Math.max(-1.5,Math.min(1.5,view.el+dy*0.01)); }
+    else { const r=view.dist*0.0016; const right=new THREE.Vector3(Math.cos(view.az),0,-Math.sin(view.az));
+      const up=new THREE.Vector3(0,1,0); view.target.addScaledVector(right,-dx*r).addScaledVector(up,dy*r); }
+    applyCam(); });
+  window.addEventListener('mouseup',e=>{ if(mode==='orbit' && moved<5) handlePick(e.clientX,e.clientY); mode=null; });
+  cv.addEventListener('wheel',e=>{ e.preventDefault(); view.dist=Math.max(10,Math.min(2000,view.dist*(e.deltaY<0?0.9:1.1))); applyCam(); },{passive:false});
+}
+
+// render3D() — rebuild the whole scene `group` from members[] + hardware[]: dispose
+// old geometry, add a mesh per visible member (tagging group.userData.mi = member
+// index for picking), apply selection highlight (whole selected wall gold, clicked
+// piece brighter), draw hardware (unless ghost), and a floor grid. Call after any
+// build or view-toggle change.
+function render3D(){
+  while(group.children.length){ const c=group.children.pop(); c.traverse&&c.traverse(o=>{o.geometry&&o.geometry.dispose&&o.geometry.dispose();}); }
+  // clicking a piece highlights its whole wall (gold), so you can see which wall it is
+  const selWall = (selectedMi>=0 && members[selectedMi] && members[selectedMi].wall!=null) ? members[selectedMi].wall : null;
+  members.forEach((m,i)=>{ if(hidden.has(i)) return;
+    const hiMat = i===selectedMi ? pickMat : (selWall!=null && m.wall===selWall ? selMat : null);
+    const g=memMesh(m, hiMat); g.userData.mi=i; group.add(g); });
+  if(!ghost) hardware.forEach(h=> group.add(hardwareMesh(h)));   // fasteners hidden in ghost view
+  // floor grid
+  const grid=new THREE.GridHelper(Math.max(P.L,P.W)*2, 12, 0x3a4a3a, 0x26302a);
+  grid.position.y=-0.2; group.add(grid);
+}
+
+/* ===== piece picking: click a member → tooltip (type / length / qty), and hide it ===== */
+const raycaster=new THREE.Raycaster();
+function pickMember(cx,cy){
+  group.updateMatrixWorld(true); camera.updateMatrixWorld(true);   // ensure world matrices are current
+  const rect=renderer.domElement.getBoundingClientRect();
+  const ndc=new THREE.Vector2(((cx-rect.left)/rect.width)*2-1, -((cy-rect.top)/rect.height)*2+1);
+  raycaster.setFromCamera(ndc,camera);
+  for(const h of raycaster.intersectObjects(group.children,true)){
+    if(h.object.type!=='Mesh') continue;                       // skip edge lines / grid
+    let o=h.object; while(o && o.userData.mi===undefined) o=o.parent;
+    if(o && o.userData.mi!==undefined) return o.userData.mi;   // hardware has no .mi → ignored
+  }
+  return -1;
+}
+// handlePick(cx,cy) — raycast at screen (cx,cy); select the hit member (re-render
+// to highlight it) and show its tooltip, or deselect if the click missed.
+function handlePick(cx,cy){
+  const mi=pickMember(cx,cy);
+  if(mi<0){ deselect(); return; }
+  selectedMi=mi; render3D(); showTooltip(mi,cx,cy);
+}
+function deselect(){ if(selectedMi>=0){ selectedMi=-1; render3D(); } hideTooltip(); }
+function hideTooltip(){ const t=$('#tooltip'); if(t) t.style.display='none'; }
+// showTooltip(mi,cx,cy) — render the inspect popup for member mi (role, which wall,
+// size, length, how many of that exact size are in the build) near the cursor, and
+// wire its close / "Hide this piece" buttons.
+function showTooltip(mi,cx,cy){
+  const m=members[mi], lenR=Math.round(m.len*16)/16;
+  const qty=members.filter(x=>x.role===m.role && x.size===m.size && Math.round(x.len*16)/16===lenR).length;
+  const tt=$('#tooltip');
+  tt.innerHTML=`<div class="tt-hd"><span class="tt-sw" style="background:#${COLORS[m.role].toString(16).padStart(6,'0')}"></span>${ROLE_LABEL[m.role]} <span style="color:var(--accent);font-family:var(--mono)">#${mi}</span><button class="tt-x" id="ttClose">✕</button></div>`+
+    `<div class="tt-row"><span>Piece #</span><b style="font-family:var(--mono)">${mi}</b></div>`+
+    (m.wall!=null ? `<div class="tt-row"><span>Belongs to</span><b style="color:var(--accent)">${wallName(m.wall)}${m.corner?' corner':''}</b></div>` : '')+
+    `<div class="tt-row"><span>Size</span><b>${m.size}</b></div>`+
+    `<div class="tt-row"><span>Length</span><b>${ftin(lenR)}</b></div>`+
+    `<div class="tt-row"><span>In build</span><b>${qty}× this size</b></div>`+
+    `<button class="tt-btn" id="ttHide">Hide this piece</button>`;
+  const mr=$('#main').getBoundingClientRect();
+  tt.style.display='block';
+  let x=cx-mr.left+14, y=cy-mr.top+14;
+  x=Math.min(Math.max(8,x), mr.width-tt.offsetWidth-8);
+  y=Math.min(Math.max(8,y), mr.height-tt.offsetHeight-8);
+  tt.style.left=x+'px'; tt.style.top=y+'px';
+  $('#ttClose').onclick=deselect;
+  $('#ttHide').onclick=()=>{ hidden.add(mi); selectedMi=-1; hideTooltip(); render3D(); updateHiddenBtn(); };
+}
+function updateHiddenBtn(){ const b=$('#tShowHidden'); if(!b) return; b.style.display=hidden.size?'':'none'; b.textContent=`Show hidden (${hidden.size})`; }
+
+/* per-member weight, calibrated so an 8' (96") 2x4 ≈ 10 lb → scales by actual cross-section */
+function memberWeight(m){ const A=m.xsec||LUMBER[m.size]; return m.len * A.t * A.w * (10/(96*1.5*3.5)); }
+function updateWallWeights(){
+  const w=[]; let roof=0; members.forEach(m=>{ if(m.wall!=null) w[m.wall]=(w[m.wall]||0)+memberWeight(m); else roof+=memberWeight(m); });
+  $$('#wallList .wallcard').forEach(card=>{ const i=+card.dataset.i, el=card.querySelector('.w-weight');
+    if(el) el.textContent = w[i]!=null ? `≈ ${Math.round(w[i])} lb` : '—'; });
+  // roof framing = every member not assigned to a wall (rafters, caps, knee/gable studs, beams, fascia…)
+  const rw=$('#roofWeight'); if(rw){ const on=P.wall&&P.wall.roof&&P.wall.roof.enabled&&roof>0.5;
+    rw.style.display=on?'':'none'; if(on) rw.innerHTML=`Roof framing ≈ <b style="color:var(--ink)">${Math.round(roof)} lb</b> (${members.filter(m=>m.wall==null).length} pieces)`; }
+}
+
+/* ===== cut list / buy list ===== */
+// ftin(inch) — format inches as feet-and-inches (rounded to 1/16"), e.g. 8' 1.5"
+function ftin(inch){ const f=Math.floor(inch/12), i=inch-f*12;
+  const r=Math.round(i*16)/16; let s=f?`${f}'`:''; if(r||!f){ s+=` ${trimNum(r)}\"`; } return s.trim(); }
+function trimNum(n){ return (Math.round(n*1000)/1000).toString(); }   // tidy float → short string
+// cutRows() — group members by role+size+length (rounded to 1/16") into {role,size,
+// len,qty} rows, sorted by role then descending length. The cut-list table source.
+function cutRows(){
+  const map=new Map();
+  members.forEach(m=>{ const len=Math.round(m.len*16)/16;
+    const key=m.role+'|'+m.size+'|'+len;
+    if(!map.has(key)) map.set(key,{role:m.role,size:m.size,len,qty:0});
+    map.get(key).qty++; });
+  return [...map.values()].sort((a,b)=> a.role.localeCompare(b.role)||b.len-a.len);
+}
+// packStock(lengths) — first-fit-decreasing bin-pack a list of piece lengths into
+// STOCK boards (adding KERF per cut after the first), returning {boards, tooLong}
+// where tooLong = pieces exceeding the longest stock (flagged for splice/redesign).
+function packStock(lengths){
+  const pcs=lengths.slice().sort((a,b)=>b-a), boards=[], tooLong=[];
+  const maxS=Math.max(...STOCK);
+  for(const p of pcs){
+    if(p>maxS){ tooLong.push(p); continue; }
+    let placed=false;
+    for(const b of boards){ const need=(b.cuts.length?KERF:0)+p; if(b.used+need<=b.stock+1e-6){ b.used+=need; b.cuts.push(p); placed=true; break; } }
+    if(!placed){ const s=STOCK.filter(x=>x>=p).sort((a,b)=>a-b)[0]||maxS; boards.push({stock:s,used:p,cuts:[p]}); }
+  }
+  return {boards,tooLong};
+}
+// renderCut() — paint the #cut panel: members table, totals (piece count, nominal
+// board-feet, joinery, hardware), and the per-size buy list with waste + over-length
+// warnings. Sheet goods (m.sheet, e.g. plywood) are excluded from bf and the buy list.
+function renderCut(){
+  const rows=cutRows();
+  const tb=$('#cutTable tbody'); tb.innerHTML='';
+  rows.forEach(r=>{ const tr=document.createElement('tr');
+    tr.innerHTML=`<td><span class="tag" style="background:#${COLORS[r.role].toString(16).padStart(6,'0')}"></span>${ROLE_LABEL[r.role]}</td>
+      <td>${r.size}</td><td class="num">${ftin(r.len)}</td><td class="num">${r.qty}</td>`;
+    tb.appendChild(tr); });
+  // totals
+  let bf=0, count=members.length;
+  members.forEach(m=>{ if(m.sheet)return; const A=LUMBER[m.size]; bf += (A.nt*A.nw*m.len)/144; });
+  const hw=[]; if(HWCOUNT.pin) hw.push(`${HWCOUNT.pin} fasteners`); if(HWCOUNT.bracket) hw.push(`${HWCOUNT.bracket} brackets`);
+  const JLBL={pin:'Cylindrical fasteners',bracket:'Brackets / hangers',lap:'Half-lap / dado'};
+  $('#totals').innerHTML=`<div class="totline"><span>Total pieces</span><b>${count}</b></div>
+    <div class="totline"><span>Board feet (nominal)</span><b>${bf.toFixed(1)} bf</b></div>
+    <div class="totline"><span>Joinery</span><b>${JLBL[P.joinery]}</b></div>
+    <div class="totline"><span>Hardware</span><b>${hw.join(', ')||'—'}</b></div>`;
+  // buy list — pack per size
+  const bySize={}; members.forEach(m=>{ if(m.sheet)return; (bySize[m.size]=bySize[m.size]||[]).push(m.len); });
+  const buy=$('#buy'); buy.innerHTML=''; let warn='';
+  Object.keys(bySize).sort().forEach(sz=>{
+    const {boards,tooLong}=packStock(bySize[sz]);
+    const byStock={}; boards.forEach(b=> byStock[b.stock]=(byStock[b.stock]||0)+1);
+    const parts=Object.keys(byStock).map(s=>`${byStock[s]}× ${(+s/12)}ft`).join(', ');
+    const waste=boards.reduce((a,b)=>a+(b.stock-b.used),0);
+    const div=document.createElement('div'); div.className='b';
+    div.innerHTML=`<span><b style="color:var(--ink)">${sz}</b> — ${parts||'—'}</span><span style="color:var(--faint)">${waste.toFixed(0)}" waste</span>`;
+    buy.appendChild(div);
+    if(tooLong.length) warn+=`${sz}: ${tooLong.length} piece(s) exceed 16ft stock — splice or reduce span. `;
+  });
+  $('#warnbox').innerHTML = warn ? `<div class="warnbox">${warn}</div>` : '';
+}
+
+/* ===== rationale (load-path explanation shown above the cut list) ===== */
+// rationale() — write the plain-English structural reasoning for the current build
+// into #rationale, branching per mode (wall/shelving have their own copy).
+function rationale(){ $('#rationale').innerHTML=wallRationale(); }
+
+/* ===== regenerate — the central refresh after any change ===== */
+// regen() — dispatch to the active mode's builder (rebuilds members[]), then reset
+// selection/hidden state and refresh everything downstream: 3D, cut list, rationale,
+// per-wall weights, localStorage save, and preset dirty status.
+function regen(){ buildWall();
+  hidden.clear(); selectedMi=-1; hideTooltip(); render3D(); updateHiddenBtn(); renderCut(); rationale(); updateWallWeights(); save(); updatePresetStatus(); }
+function save(){ try{ localStorage.setItem(LS, JSON.stringify(P)); }catch(e){} }   // persist P (best-effort)
+
+/* ===== UI wiring (sidebar controls ↔ P, then regen) ===== */
+// fillSel(id) — populate a lumber-size <select> with all LUMBER keys, set to P[id].
+function fillSel(id){ const el=$('#'+id); if(!el) return; el.innerHTML=Object.keys(LUMBER).map(k=>`<option value="${k}">${k}</option>`).join(''); el.value=P[id]; }
+// syncUI() — push the current P values OUT to every control (toggles, segmented
+// buttons, number inputs, panel visibility, hint text) so the DOM matches state.
+// Call after any change that isn't already reflected by the control the user touched.
+function syncUI(){
+  $('#wHeight').value=P.wall.height; $('#wOC').value=P.wall.oc;
+  $$('#wSizeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.ws===P.wall.size));
+}
+// num(id,key,min) — bind a number input to P[key] (clamped ≥ min), regen on input.
+// --- direct event bindings for the viewport toolbar (edges/ghost/cut/reset/find). ---
+$('#tEdges').addEventListener('click',()=>{ showEdges=!showEdges; $('#tEdges').classList.toggle('on',showEdges); render3D(); });
+$('#tGhost').addEventListener('click',()=>{ ghost=!ghost; $('#tGhost').classList.toggle('on',ghost); render3D(); });
+$('#tCut').addEventListener('click',()=>{ const h=$('#cut').classList.toggle('hidden'); $('#tCut').classList.toggle('on',!h); });
+$('#tReset').addEventListener('click',frame);
+// Find #N — highlight a piece by its number (un-hide if needed) and pop its inspector at viewport centre
+$('#tFind').addEventListener('change',e=>{ const n=parseInt(e.target.value,10);
+  if(isNaN(n)||n<0||n>=members.length){ deselect(); return; }
+  hidden.delete(n); selectedMi=n; render3D(); updateHiddenBtn();
+  const mr=$('#main').getBoundingClientRect(); showTooltip(n, mr.left+mr.width/2, mr.top+mr.height*0.35); });
+$('#tShowHidden').addEventListener('click',()=>{ hidden.clear(); selectedMi=-1; hideTooltip(); render3D(); updateHiddenBtn(); });
+
+/* ===== wall UI ===== */
+$('#wHeight').addEventListener('input',e=>{ P.wall.height=Math.max(48,parseFloat(e.target.value)||96); regen(); });
+$('#wOC').addEventListener('input',e=>{ P.wall.oc=Math.max(8,Math.min(24,parseFloat(e.target.value)||16)); regen(); });
+$('#wSizeSeg').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b)return; P.wall.size=b.dataset.ws; $$('#wSizeSeg button').forEach(x=>x.classList.toggle('on',x===b)); renderWalls(); regen(); });   // re-render so solid-header options switch 4x↔6x
+const newWall=()=>({len:96,corner:'3stud',openings:[]});   // a fresh wall's defaults (caller adds from/at/dir)
+$('#addWall').addEventListener('click',()=>{ const ws=P.wall.walls;
+  ws.push(Object.assign(newWall(), {from:ws.length?ws.length-1:-1, at:'end', dir:'right'})); renderWalls(); regen(); });
+// remove a wall, re-homing its children onto its parent (so the tree stays valid) and fixing indices
+function deleteWall(d){ const ws=P.wall.walls; const gp=(ws[d]&&ws[d].from!=null)?ws[d].from:-1;
+  ws.forEach((w,k)=>{ if(k!==d && w.from===d) w.from=(gp!==d?gp:-1); });
+  ws.splice(d,1);
+  ws.forEach(w=>{ if(typeof w.from==='number' && w.from>d) w.from--; });
+  if(!ws.length) ws.push(Object.assign(newWall(),{from:-1}));
+  ws[0].from=-1;                                          // first wall is always the root
+}
+// atMode(w) — classify how a wall attaches to its parent for the UI selector:
+// 'start' | 'end' | 'along' (a numeric `at` = a mid-wall tee at that distance).
+const atMode=w=> w.at==='start'?'start' : (w.at==='end'||w.at==null)?'end':'along';
+
+/* ===== ROOF (add-on) — UI SCAFFOLD ONLY. No framing geometry is generated yet;
+   these helpers just gate the UI on a closed wall loop and hold provisional config. ===== */
+// world placement {O,D,len} per wall — mirrors buildWall pass 1 (keep in sync)
+function wallFrames(){
+  const walls=(P.wall&&P.wall.walls)||[], n=walls.length;
+  const X=new THREE.Vector3(1,0,0), O0=new THREE.Vector3(0,0,0), F=new Array(n).fill(null);
+  function place(i){ const w=walls[i], from=(w.from==null?-1:w.from);
+    if(i===0||from<0||from>=n||from===i){ F[i]={O:O0.clone(),D:X.clone(),len:Math.max(12,w.len||96)}; return true; }
+    if(!F[from]) return false;
+    const Fp=F[from], s=w.at==='start'?0:(w.at==='end'||w.at==null)?Fp.len:Math.max(0,Math.min(Fp.len,parseFloat(w.at)||0));
+    const V=Fp.O.clone().addScaledVector(Fp.D,s);
+    const D=w.dir==='left'?nextDir(Fp.D,'left'):w.dir==='right'?nextDir(Fp.D,'right'):Fp.D.clone();
+    F[i]={O:V,D,len:Math.max(12,w.len||96)}; return true; }
+  for(let pass=0;pass<=n;pass++){ let done=true; for(let i=0;i<n;i++) if(!F[i]&&!place(i)) done=false; if(done) break; }
+  for(let i=0;i<n;i++) if(!F[i]) F[i]={O:O0.clone(),D:X.clone(),len:Math.max(12,walls[i].len||96)};
+  return F;
+}
+// closed = every wall endpoint coincides with another's (no dangling/open ends). Simple
+// heuristic for the common single-loop case; interior partitions aren't handled yet (TODO w/ research).
+function wallsClosed(){
+  const walls=(P.wall&&P.wall.walls)||[]; if(walls.length<3) return false;
+  const F=wallFrames();
+  // is point p ON wall segment f (an endpoint OR a mid-wall tee) within ~1"?
+  const onSeg=(p,f)=>{ const A=f.O, AB=f.D.clone().multiplyScalar(f.len), L=f.len; if(L<1e-6) return false;
+    const t=p.clone().sub(A).dot(AB)/(L*L); if(t<-1/L || t>1+1/L) return false;
+    return A.clone().addScaledVector(AB, Math.max(0,Math.min(1,t))).distanceTo(p) <= 1; };
+  // CLOSED = no dangling ends: every wall endpoint lands on ANOTHER wall (a shared corner or a mid-wall
+  // tee). This admits multi-rectangle footprints (L/T/wings), not just a single 4-wall loop.
+  const ends=[]; F.forEach((f,i)=>{ ends.push({p:f.O,i}); ends.push({p:f.O.clone().addScaledVector(f.D,f.len),i}); });
+  return ends.every(e=> F.some((f,j)=> j!==e.i && onSeg(e.p,f)));
+}
+// renderRoof() — render the Roof add-on UI into #roofSec. SCAFFOLD ONLY: if the
+// walls form a closed loop it shows type/pitch/overhang controls that update
+// P.wall.roof, but NO roof members are ever generated (see the in-panel warning).
+// Otherwise it shows a "enclose a closed loop" prompt. Called at the end of renderWalls().
+function renderRoof(){
+  const el=document.getElementById('roofSec'); if(!el) return;
+  const r=P.wall.roof||(P.wall.roof={enabled:false,type:'gable',pitch:6,overhang:12});
+  if(!wallsClosed()){
+    el.innerHTML=`<div class="sec-hd">Roof <span style="color:var(--faint);font-weight:400;text-transform:none;letter-spacing:0">· add-on</span></div>
+      <div class="hint">Enclose a <b>closed loop of walls</b> (no open ends) to add a roof — e.g. a rectangle, or any closed polygon. Roof options will appear here.</div>`;
+    return;
+  }
+  const TYPES=[['gable','Gable'],['shed','Shed / mono-pitch'],['hip','Hip (soon)'],['flat','Flat (soon)']];
+  const RSIZES=['2x6','2x8','2x10','2x12'];
+  const nWalls=(P.wall.walls||[]).length, rectangular=nWalls===4;
+  // geometry readout (gable: run = half the shorter span; shed: run = the full shorter span)
+  let readout='';
+  if(r.type==='shed' || rectangular){
+    const F=wallFrames(),xs=[],zs=[];
+    F.forEach(f=>{const b=f.O.clone().addScaledVector(f.D,f.len);xs.push(f.O.x,b.x);zs.push(f.O.z,b.z);});
+    const Lx=Math.max(...xs)-Math.min(...xs), Lz=Math.max(...zs)-Math.min(...zs);
+    const slope=Math.max(0,r.pitch||0)/12, ov=Math.max(0,r.overhang||0), shortAx=Lx<Lz?'X':'Z';
+    const ft=v=>`${Math.floor(v/12)}&prime;${Math.round(v%12)}&Prime;`;
+    if(r.type==='shed'){
+      const run=Math.min(Lx,Lz), rise=run*slope, rlen=Math.hypot(run,rise)+2*ov*Math.hypot(1,slope);
+      const mr = nWalls>4 ? ` · <b>multi-rectangle</b>: follows the outline` : '';
+      readout=`<div class="hint">Run ≈ <b>${ft(run)}</b> · high wall raised ≈ <b>${ft(rise)}</b> · rafter incl. overhangs ≈ <b>${ft(rlen)}</b> · slope across the <b>${shortAx}</b> (shorter) axis${mr}.</div>`;
+    } else {
+      const halfRun=Math.min(Lx,Lz)/2, rise=halfRun*slope, rlen=Math.hypot(halfRun,rise)+ov*Math.hypot(1,slope);
+      readout=`<div class="hint">Run ≈ <b>${ft(halfRun)}</b> · rise ≈ <b>${ft(rise)}</b> · rafter incl. overhang ≈ <b>${ft(rlen)}</b> · ridge along the <b>${Lx>=Lz?'X':'Z'}</b> (longer) axis.</div>`;
+    }
+  }
+  let note;
+  if(r.type==='hip'||r.type==='flat') note=`<div class="hint" style="border-left:3px solid var(--warn);background:var(--p2);border-radius:4px;padding:8px 9px;color:var(--ink)">⚠ <b>Hip / flat are coming next</b> — no geometry is generated for this type yet.</div>`;
+  else if(r.type==='gable' && !rectangular) note=`<div class="hint" style="border-left:3px solid var(--warn);background:var(--p2);border-radius:4px;padding:8px 9px;color:var(--ink)">⚠ <b>Gable</b> currently needs a rectangular (4-wall) footprint — this loop has ${nWalls} walls. Switch to <b>Shed / mono-pitch</b>, which now roofs multi-rectangle footprints.</div>`;
+  else if(r.type==='shed') note=`<div class="hint">Mono-pitch: rafters slope from the LOW wall up to the HIGH wall (knee wall), birdsmouths + eave tails, sloped rake-wall infill, rake overhang + lookouts, subfascia, and level ceiling joists at the low-wall plate (flat drywall ceiling).${nWalls>4?' <b>Multi-rectangle</b> footprints follow the outline.':''} <b>Heuristic — verify the rafter size against span tables for your snow load.</b></div>`;
+  else note=`<div class="hint">Common rafters + ridge board + ceiling-joist ties on the rectangle, with birdsmouths, rake overhang &amp; lookouts, subfascia, collar ties, and gable-end framing. <b>Heuristic — verify the rafter size against span tables for your snow load.</b></div>`;
+  el.innerHTML=`<div class="sec-hd">Roof <span style="color:var(--good);font-weight:600;font-size:9px;text-transform:none;letter-spacing:0">● closed loop detected</span></div>
+    <label class="toggle"><input type="checkbox" id="roofOn"${r.enabled?' checked':''}> Add a roof</label>
+    ${r.enabled?`<div class="sub">
+      <div class="field"><label>Roof type</label><select id="roofType">${TYPES.map(([v,l])=>`<option value="${v}"${r.type===v?' selected':''}>${l}</option>`).join('')}</select></div>
+      <div class="row">
+        <div class="field"><label>Pitch (rise / 12)</label><input type="number" id="roofPitch" min="0" max="24" step="0.5" value="${r.pitch}"></div>
+        <div class="field"><label>Overhang (in)</label><input type="number" id="roofOverhang" min="0" step="1" value="${r.overhang}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Rafter size</label><select id="roofRSize">${RSIZES.map(s=>`<option value="${s}"${r.rafterSize===s?' selected':''}>${s}</option>`).join('')}</select></div>
+        <div class="field"><label>Rafter O.C. (in)</label><input type="number" id="roofROC" min="8" max="24" step="1" value="${r.rafterOC}"></div>
+      </div>
+      ${r.type==='shed'?`<label class="toggle"><input type="checkbox" id="roofFlip"${r.shedFlip?' checked':''}> Flip slope (swap high &amp; low side)</label>`:''}
+      ${readout}${note}
+    </div>`:''}`;
+}
+// renderWalls() — rebuild the per-wall control cards in #wallList from P.wall.walls:
+// length, branch-from / attach-at / direction selectors (non-root), junction-stud
+// technique, each opening's row (type/pos/size/sill) + header & load-bearing row,
+// and the spawn buttons. The header dropdown is wall-aware (solid 4x↔6x by stud
+// size). Input/change/click are handled by delegated listeners on #wallList (below).
+// Ends by calling renderRoof() so closed-loop detection stays fresh.
+function renderWalls(){
+  const wl=$('#wallList'); if(!wl) return; wl.innerHTML='';
+  const ws=P.wall.walls;
+  ws.forEach((w,i)=>{
+    const card=document.createElement('div'); card.className='wallcard'; card.dataset.i=i;
+    const isRoot = i===0 || w.from==null || w.from<0;
+    const solidPre=(P.wall.size==='2x6')?'6x':'4x';   // solid headers fill the wall: 6x for 2x6 studs, else 4x
+    const HOPTS=[...['6','8','10','12'].map(d=>['2x'+d,'2x'+d+' built-up']), ...['6','8','10','12'].map(d=>[solidPre+d,solidPre+d+' solid'])];
+    const oh=(w.openings||[]).map((o,j)=>{const bearing=o.bearing!==false, hsz=o.header||defHeaderSize(o.w||30);
+      const hSel=/^(4|6)x/.test(hsz)? solidPre+hsz.slice(hsz.indexOf('x')+1) : hsz;   // match solid by depth → wall's family
+      const ref=o.ref||'start', posV=openPos(o, w.len);
+      return `<div class="openrow" data-j="${j}" title="POSITION — where the opening sits along the wall">
+      <select class="o-kind"><option value="door"${o.kind==='door'?' selected':''}>Door</option><option value="window"${o.kind==='window'?' selected':''}>Window</option></select>
+      <select class="o-ref" title="measure the position from…" style="flex:1 1 0;min-width:0">
+        <option value="start"${ref==='start'?' selected':''}>from start</option><option value="end"${ref==='end'?' selected':''}>from end</option><option value="center"${ref==='center'?' selected':''}>centered</option></select>
+      <input class="o-pos" type="number" title="${ref==='center'?'offset of the opening centre from the wall centre (0 = centred)':'distance along the wall to the opening'}" value="${+posV.toFixed(1)}" style="width:46px"><span style="font-size:9px;color:var(--dim)">in</span>
+      <button class="del o-del" title="remove">✕</button></div>
+      <div class="openrow" data-j="${j}" style="padding-left:2px" title="SIZE — the rough-opening dimensions">
+      <span style="font-size:9px;color:var(--dim);width:22px">size</span>
+      <input class="o-w" type="number" title="rough-opening WIDTH" value="${o.w}" style="width:40px"><span style="font-size:9px;color:var(--dim);margin-right:2px">w</span>
+      <input class="o-h" type="number" title="rough-opening HEIGHT" value="${o.h}" style="width:40px"><span style="font-size:9px;color:var(--dim);margin-right:2px">h</span>
+      ${o.kind==='window'?`<input class="o-sill" type="number" title="SILL height (window bottom above floor)" value="${o.sill}" style="width:40px"><span style="font-size:9px;color:var(--dim)">sill</span>`:''}</div>
+      <div class="openrow2" data-j="${j}" style="display:flex;gap:5px;align-items:center;margin:1px 0 7px;font-size:10px;color:var(--dim)">
+        <select class="o-header" title="header (2x = built-up + ½″ ply · solid = single timber, fills the wall)"${bearing?'':' disabled'}>${HOPTS.map(([v,l])=>`<option value="${v}"${hSel===v?' selected':''}>${l}</option>`).join('')}</select>
+        <label style="display:flex;gap:3px;align-items:center;cursor:pointer"><input type="checkbox" class="o-bearing"${bearing?' checked':''}>load-bearing</label>
+      </div>`;}).join('');
+    const am=atMode(w);
+    const branchUI = isRoot
+      ? `<div class="hint" style="margin:2px 0 8px">⌂ Root — starts at the origin, heads +X. Other walls branch off it.</div>`
+      : `<div class="row">
+           <div class="field"><label>Branch from</label><select class="w-from">${
+             ws.map((_,k)=> k===i?'':`<option value="${k}"${w.from===k?' selected':''}>${wallName(k)}</option>`).join('')}</select></div>
+           <div class="field"><label>Attach at</label><select class="w-at">
+             <option value="end"${am==='end'?' selected':''}>parent end</option>
+             <option value="start"${am==='start'?' selected':''}>parent start</option>
+             <option value="along"${am==='along'?' selected':''}>along…</option></select></div>
+         </div>
+         <div class="row">
+           <div class="field"><label>Direction</label><select class="w-dir">
+             <option value="left"${w.dir==='left'?' selected':''}>turn left</option>
+             <option value="straight"${(w.dir==='straight'||!w.dir)?' selected':''}>straight</option>
+             <option value="right"${w.dir==='right'?' selected':''}>turn right</option></select></div>
+           ${am==='along'?`<div class="field"><label>Dist along (in)</label><input class="w-atnum" type="number" value="${(+w.at)||0}"></div>`:`<div class="field"></div>`}
+         </div>
+         <div class="field"><label>Junction studs (at parent)</label><select class="w-corner">${
+           [['california','California — broken, needs fixing',true],['2stud','2-stud'],['3stud','3-stud'],['4stud','4-stud']]
+             .map(([v,lbl,broken])=>`<option value="${v}"${cornerType(w.corner)===v?' selected':''}${broken?' disabled style="color:#888"':''}>${lbl}</option>`).join('')}</select></div>`;
+    card.innerHTML=`<div class="wallcard-hd" style="gap:4px">${isRoot?'<span title="root wall" style="color:var(--dim);font-size:11px">⌂</span>':''}<input class="w-name" type="text" value="${(w.name||'').replace(/"/g,'&quot;')}" placeholder="Wall ${i+1}" title="rename this wall" style="flex:1 1 0;min-width:24px;font:inherit;font-size:11px;font-weight:600;color:var(--accent);background:none;border:none;border-bottom:1px dashed var(--line);padding:1px 2px;outline:none"><button class="w-face" title="Swing the camera square-on to this wall (edit it head-on)" style="background:var(--accent);border:none;border-radius:4px;color:#16100a;font-size:10px;font-weight:700;line-height:1;padding:4px 9px;cursor:pointer;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.35)">⊙ Face</button><span class="w-weight" style="font-size:10px;color:var(--dim);font-weight:400;white-space:nowrap;margin-right:2px">—</span><button class="del w-del">✕</button></div>
+      <div class="row"><div class="field"><label>Length (in)</label><input class="w-len" type="number" value="${w.len}"></div></div>
+      ${branchUI}
+      <div style="font-size:9px;color:var(--faint);margin:4px 0 2px">openings — top row: type + POSITION (measured from start/end/centred) · 2nd row: SIZE (w·h·sill)</div>${oh}
+      <div class="miniband"><button class="btn ghost addDoor">+ Door</button><button class="btn ghost addWin">+ Window</button></div>
+      <div class="miniband" style="margin-top:4px"><button class="btn ghost bk" data-k="straight" title="continue straight off this wall's end">▸ Extend</button><button class="btn ghost bk" data-k="left" title="branch left off this wall's end">↰ Left</button><button class="btn ghost bk" data-k="right" title="branch right off this wall's end">↱ Right</button><button class="btn ghost bk" data-k="tee" title="tee off the middle of this wall">⊥ Tee</button></div>`;
+    wl.appendChild(card);
+  });
+  renderRoof();   // refresh the roof add-on (closed-loop detection) whenever walls change
+}
+// wallAt(e) — from a delegated event, find the .wallcard it came from and return
+// {w: that wall object, i: its index} (or null). Lets the listeners below edit P.
+function wallAt(e){ const c=e.target.closest('.wallcard'); return c? {w:P.wall.walls[+c.dataset.i], i:+c.dataset.i} : null; }
+/* roof add-on controls (scaffold — update config only, no geometry built) */
+$('#roofSec').addEventListener('change',e=>{ const r=P.wall.roof, id=e.target.id;
+  if(id==='roofOn'){ r.enabled=e.target.checked; renderRoof(); regen(); }
+  else if(id==='roofType'){ r.type=e.target.value; renderRoof(); regen(); }
+  else if(id==='roofFlip'){ r.shedFlip=e.target.checked; regen(); }
+  else if(id==='roofRSize'){ r.rafterSize=e.target.value; regen(); } });
+// NOTE: 'input' handlers must NOT call renderRoof() (it rebuilds #roofSec and would steal
+// focus mid-keystroke). regen() updates the 3D live; the readout refreshes on the next commit.
+$('#roofSec').addEventListener('input',e=>{ const r=P.wall.roof, id=e.target.id;
+  if(id==='roofPitch'){ r.pitch=Math.max(0,parseFloat(e.target.value)||0); regen(); }
+  else if(id==='roofOverhang'){ r.overhang=Math.max(0,parseFloat(e.target.value)||0); regen(); }
+  else if(id==='roofROC'){ r.rafterOC=Math.max(8,Math.min(24,parseFloat(e.target.value)||16)); regen(); } });
+$('#wallList').addEventListener('input',e=>{ const r=wallAt(e); if(!r)return; const cl=e.target.classList;
+  if(cl.contains('w-name')){ r.w.name=e.target.value; save(); return; }   // rename — label only, no geometry change
+  if(cl.contains('w-len')) r.w.len=Math.max(12,parseFloat(e.target.value)||96);
+  if(cl.contains('w-atnum')) r.w.at=Math.max(0,parseFloat(e.target.value)||0);
+  const row=e.target.closest('.openrow'); if(row){ const o=r.w.openings[+row.dataset.j];
+    if(cl.contains('o-pos')) o.x=openX(o, r.w.len, parseFloat(e.target.value)||0);   // store as absolute left-edge distance
+    if(cl.contains('o-w')) o.w=Math.max(6,parseFloat(e.target.value)||30);
+    if(cl.contains('o-h')) o.h=Math.max(6,parseFloat(e.target.value)||60);
+    if(cl.contains('o-sill')) o.sill=Math.max(0,parseFloat(e.target.value)||0); }
+  regen(); });
+$('#wallList').addEventListener('change',e=>{ const r=wallAt(e); if(!r)return; const cl=e.target.classList;
+  if(cl.contains('w-from')){ r.w.from=parseInt(e.target.value,10); regen(); return; }
+  if(cl.contains('w-dir')){ r.w.dir=e.target.value; regen(); return; }
+  if(cl.contains('w-corner')){ r.w.corner=e.target.value; regen(); return; }
+  if(cl.contains('w-at')){ const v=e.target.value;
+    if(v==='along'){ const p=P.wall.walls[r.w.from]; r.w.at=Math.max(12,Math.round(((p&&p.len)||96)/2)); }
+    else r.w.at=v;
+    renderWalls(); regen(); return; }                    // toggles the dist field
+  const orow=e.target.closest('.openrow,.openrow2'); if(orow){ const o=r.w.openings[+orow.dataset.j];
+    if(cl.contains('o-ref')){ o.ref=e.target.value; renderWalls(); save(); return; }   // just re-display the position; opening stays put
+    if(cl.contains('o-kind')){ o.kind=e.target.value; if(o.kind==='window'&&!o.sill)o.sill=30; renderWalls(); regen(); return; }
+    if(cl.contains('o-header')){ o.header=e.target.value; regen(); return; }
+    if(cl.contains('o-bearing')){ o.bearing=e.target.checked; renderWalls(); regen(); return; }   // re-render to enable/disable the header select
+  } });
+$('#wallList').addEventListener('click',e=>{ const r=wallAt(e); if(!r)return; const cl=e.target.classList;
+  if(cl.contains('w-face')){ faceWall(r.i); return; }
+  if(cl.contains('w-del')){ deleteWall(r.i); renderWalls(); regen(); return; }
+  if(cl.contains('addDoor')){ r.w.openings.push({kind:'door',x:24,w:36,h:82,sill:0,header:defHeaderSize(36),bearing:true}); renderWalls(); regen(); return; }
+  if(cl.contains('addWin')){ r.w.openings.push({kind:'window',x:24,w:36,h:36,sill:30,header:defHeaderSize(36),bearing:true}); renderWalls(); regen(); return; }
+  if(cl.contains('o-del')){ const row=e.target.closest('.openrow'); r.w.openings.splice(+row.dataset.j,1); renderWalls(); regen(); return; }
+  if(cl.contains('bk')){ const k=e.target.dataset.k;
+    const nw = k==='tee'
+      ? Object.assign(newWall(), {from:r.i, at:Math.max(12,Math.round((r.w.len||96)/2)), dir:'right'})
+      : Object.assign(newWall(), {from:r.i, at:'end', dir:k});
+    P.wall.walls.push(nw); renderWalls(); regen(); return; }
+});
+
+/* legend */
+$('#legend').innerHTML=Object.keys(ROLE_LABEL).map(r=>`<div><span class="sw" style="background:#${COLORS[r].toString(16).padStart(6,'0')}"></span>${ROLE_LABEL[r]}</div>`).join('')
+  +`<div style="margin-top:4px;border-top:1px solid var(--line);padding-top:4px"><span class="sw" style="background:#${HWCOL.pin.toString(16)}"></span>Fasteners / hardware</div>`;
+
+/* ===== export (cut list → .txt / .csv) ===== */
+// dl(name,text,type) — trigger a browser download of `text` as a file via a blob URL.
+function dl(name,text,type){ const b=new Blob([text],{type:type||'text/plain'}); const a=document.createElement('a');
+  a.href=URL.createObjectURL(b); a.download=name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href); }
+$('#expCut').addEventListener('click',()=>{
+  const rows=cutRows(); let bf=0; members.forEach(m=>{if(m.sheet)return; const A=LUMBER[m.size]; bf+=(A.nt*A.nw*m.len)/144;});
+  const head = P.mode==='wall'
+    ? `TIMBER FRAMER — WALL CUT LIST\nWalls: ${P.wall.walls.length}, ${P.wall.size} @ ${P.wall.oc}" O.C., ${P.wall.height}" high\nNailed (cylindrical fasteners)`
+    : `TIMBER FRAMER — CUT LIST\nOuter: ${P.L} x ${P.W} x ${P.H} in (LxWxH)\nFeatures: ${[P.f_top&&'top deck',P.f_rack&&('racking:'+P.brace),P.f_shelf&&('shelves:'+P.nShelf),P.f_cant&&('cantilever:'+P.overhang)].filter(Boolean).join(', ')}\nJoinery: ${P.joinery}`;
+  let t=head+`\n\nQTY  SIZE   LENGTH        MEMBER\n`;
+  rows.forEach(r=> t+=`${String(r.qty).padStart(3)}  ${r.size.padEnd(5)}  ${ftin(r.len).padEnd(12)}  ${ROLE_LABEL[r.role]}\n`);
+  const hw=[]; if(HWCOUNT.pin)hw.push(HWCOUNT.pin+' fasteners'); if(HWCOUNT.bracket)hw.push(HWCOUNT.bracket+' brackets/hangers');
+  t+=`\nHardware: ${hw.join(', ')||'—'}\nTotal pieces: ${members.length}    Board feet: ${bf.toFixed(1)} bf\n\nBUY LIST (stock)\n`;
+  const bySize={}; members.forEach(m=>{if(m.sheet)return; (bySize[m.size]=bySize[m.size]||[]).push(m.len);});
+  Object.keys(bySize).sort().forEach(sz=>{ const {boards,tooLong}=packStock(bySize[sz]); const bs={}; boards.forEach(b=>bs[b.stock]=(bs[b.stock]||0)+1);
+    t+=`${sz}: ${Object.keys(bs).map(s=>bs[s]+'x '+(s/12)+'ft').join(', ')}${tooLong.length?'  (!'+tooLong.length+' over-length)':''}\n`; });
+  t+=`\nHeuristic guidance only — not engineered. Verify load-bearing designs.\n`;
+  dl('cut-list.txt',t);
+});
+$('#expCsv').addEventListener('click',()=>{
+  let t='qty,size,length_in,length_ftin,member\n';
+  cutRows().forEach(r=> t+=`${r.qty},${r.size},${r.len},"${ftin(r.len)}",${ROLE_LABEL[r.role]}\n`);
+  dl('cut-list.csv',t,'text/csv');
+});
+
+/* ===== Presets (saved designs) =====
+   A preset captures the ENTIRE P (all three sub-mode configs + active mode), stored
+   as an array of {name, ...config} under PKEY — separate from the auto-saved working
+   state (LS). loadedPresetName/JSON snapshot the active preset for dirty tracking. */
+const PKEY='timberframer.presets.v1';   // experimental fork: isolated presets
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));   // HTML-escape for names
+let loadedPresetName='', loadedPresetJSON='';
+function loadMyPresets(){ try{ return JSON.parse(localStorage.getItem(PKEY)||'[]'); }catch(e){ return []; } }   // read preset array
+function saveMyPresets(list){ try{ localStorage.setItem(PKEY, JSON.stringify(list)); }catch(e){} }            // write preset array
+function currentConfig(){ return JSON.parse(JSON.stringify(P)); }   // the whole design (all modes); no name
+function presetSummary(c){
+  if(c.mode==='wall'){ const n=((c.wall||{}).walls||[]).length; return `wall · ${n} wall${n!==1?'s':''}`; }
+  if(c.mode==='shelving') return 'shelving';
+  return `${c.L}×${c.W}×${c.H}″`;
+}
+function renderMyPresets(){
+  const list=loadMyPresets(), sel=$('#presetLoad'); if(!sel) return;
+  sel.innerHTML='<option value="">'+(list.length?'— load preset —':'No saved presets yet')+'</option>'
+    + list.map((c,i)=>`<option value="${i}">${esc(c.name)} (${presetSummary(c)})</option>`).join('');
+}
+// updatePresetStatus() — write the #presetNote line: ◇ unsaved design, ◆ name, or
+// ◆ name (unsaved edits) when the live config differs from the loaded snapshot.
+function updatePresetStatus(){
+  const el=$('#presetNote'); if(!el) return;
+  if(!loadedPresetName){ el.textContent='◇ unsaved design'; return; }
+  const dirty = JSON.stringify(currentConfig()) !== loadedPresetJSON;
+  el.innerHTML='◆ '+esc(loadedPresetName)+(dirty?' <span class="mod">(unsaved edits)</span>':'');
+}
+// loadConfig(cfg) — apply a preset: strip its name, Object.assign the config onto P,
+// re-run the joinery migration, snapshot it as the loaded preset, then rebuild the UI
+// and model (syncUI + renderWalls + regen + frame).
+function loadConfig(cfg){
+  const {name, ...conf}=JSON.parse(JSON.stringify(cfg));
+  Object.assign(P, conf);
+  if(!['pin','bracket','lap'].includes(P.joinery)) P.joinery='pin';
+  loadedPresetName=name||''; loadedPresetJSON=JSON.stringify(currentConfig());
+  syncUI(); renderWalls(); regen(); frame();
+}
+$('#presetLoad').addEventListener('change', e=>{
+  if(e.target.value==='') return;
+  const cfg=loadMyPresets()[+e.target.value]; e.target.value='';   // reset so the same one re-loads
+  if(cfg) loadConfig(cfg);
+});
+$('#savePreset').addEventListener('click', ()=>{
+  const name=(prompt('Name this design (e.g. "Workbench 48×24")', loadedPresetName||'')||'').trim();
+  if(!name) return;
+  const list=loadMyPresets(), entry={name, ...currentConfig()};
+  const i=list.findIndex(p=>(p.name||'').toLowerCase()===name.toLowerCase());
+  if(i>=0){ if(!confirm(`A preset named "${list[i].name}" already exists. Update it?`)) return; list[i]=entry; }
+  else list.push(entry);
+  saveMyPresets(list);
+  loadedPresetName=name; loadedPresetJSON=JSON.stringify(currentConfig());
+  renderMyPresets(); updatePresetStatus();
+});
+$('#renamePreset').addEventListener('click', ()=>{
+  const list=loadMyPresets();
+  if(!list.length){ alert('No saved presets yet — click Save first.'); return; }
+  const i=loadedPresetName ? list.findIndex(p=>(p.name||'').toLowerCase()===loadedPresetName.toLowerCase()) : -1;
+  if(i<0){ alert('Load a preset first, then Rename it.'); return; }
+  const cur=list[i].name, nn=(prompt(`Rename "${cur}" to:`, cur)||'').trim();
+  if(!nn||nn===cur) return;
+  if(list.some((p,k)=>k!==i && (p.name||'').toLowerCase()===nn.toLowerCase())){ alert('A preset with that name already exists.'); return; }
+  list[i].name=nn; saveMyPresets(list);
+  loadedPresetName=nn; renderMyPresets(); updatePresetStatus();
+});
+$('#presetDelete').addEventListener('click', ()=>{
+  const list=loadMyPresets();
+  if(!list.length){ alert('No saved presets to delete.'); return; }
+  const i=loadedPresetName ? list.findIndex(p=>(p.name||'').toLowerCase()===loadedPresetName.toLowerCase()) : list.length-1;
+  if(i<0||!list[i]){ alert('Load a preset first, then delete it.'); return; }
+  if(!confirm(`Delete preset "${list[i].name}"?`)) return;
+  const removed=list[i].name; list.splice(i,1); saveMyPresets(list); renderMyPresets();
+  if(loadedPresetName && removed.toLowerCase()===loadedPresetName.toLowerCase()){ loadedPresetName=''; loadedPresetJSON=''; }
+  updatePresetStatus();
+});
+$('#exportPreset').addEventListener('click', ()=>{
+  const list=loadMyPresets();
+  if(!list.length){ alert('No saved presets to export.'); return; }
+  dl('timberframer-exp-presets.json', JSON.stringify(list,null,2), 'application/json');
+});
+$('#importPreset').addEventListener('click', ()=> $('#presetFile').click());
+$('#presetFile').addEventListener('change', e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ try{
+    const incoming=JSON.parse(r.result);
+    const arr=Array.isArray(incoming)?incoming:[incoming];
+    const clean=arr.filter(c=>c&&typeof c==='object'&&c.name);
+    if(!clean.length){ alert('No valid presets found in that file.'); return; }
+    saveMyPresets(loadMyPresets().concat(clean)); renderMyPresets();
+    alert(`Imported ${clean.length} preset${clean.length!==1?'s':''}.`);
+  }catch(err){ alert('That file is not valid preset JSON.'); } };
+  r.readAsText(f); e.target.value='';
+});
+
+/* ===== in-app changelog (newest first; CHANGELOG[0].v is the app version) ===== */
+/* each note: {t:'feat'|'fix', text}.  feat = new feature, fix = bug/correctness fix */
+const CHANGELOG=[
+  {v:'1.10', date:'2026-06-29', notes:[
+    {t:'feat', text:'Walls can be NAMED — type a name in the wall card’s header (defaults to “Wall N”). The name shows in every “Branch from” dropdown and in the piece inspector, so a big layout reads as rooms instead of numbers.'},
+    {t:'feat', text:'“⊙” (face) button on each wall card swings the camera SQUARE-ON to that wall (elevation-style), so you edit it head-on.'},
+    {t:'change', text:'Friendlier opening placement: an opening’s POSITION now has a reference selector — measure it FROM START, FROM END, or CENTERED — and sits on its own row, with the SIZE (width · height · sill) on a separate labelled row, so it’s obvious which controls move the opening vs resize it.'},
+    {t:'fix', text:'Gable collar ties no longer clip the ceiling joists on low-slope roofs — they’re lifted to keep ≥1″ above the joist tops, and where the slope is too shallow for one to tuck under the ridge at all, it’s omitted instead of clipping.'},
+    {t:'change', text:'The per-wall head-on view control is now a filled, labelled “⊙ Face” button (was a faint outline icon) so it’s easy to spot.'},
+    {t:'fix', text:'The CALIFORNIA junction-stud option is disabled (greyed) and marked “broken, needs fixing” — it’s a known-broken technique, so it can no longer be picked and any wall still set to it falls back to a 3-stud corner.'},
+  ]},
+  {v:'1.9', date:'2026-06-29', notes:[
+    {t:'feat', text:'SHED / mono-pitch roofs now get level CEILING JOISTS at the low-wall plate height (a flat surface for a drywall ceiling), one per rafter bay — the same way the gable roof does. Each joist beds fully onto BOTH eave top plates (out to the outer faces) and is shifted in line to sit BESIDE the knee studs and rafters rather than clip through them; works for single-rectangle and follow-the-outline (L-shape) sheds, either slope direction.'},
+    {t:'fix', text:'Where a ceiling-joist bay spans an interior divider wall, instead of one joist landing on the divider (clipping its gable studs) there are now TWO joists, one tight against each room’s side of the divider. Plus a corner-backing joist tight against each EXTERIOR rake (end) wall — so the ceiling-drywall edge is backed at the room ends and the divider in every room. Each of those corner-backing joists is slid sideways so its FACE bears against (nails to) the high-eave corner post — kept whole, no notches.'},
+    {t:'change', text:'Focused the app on WALL + ROOF framing: removed the Structure and Shelving tabs (those move to a separate project) — it now opens straight into the wall/roof builder with no mode switcher.'},
+    {t:'change', text:'Removed the “one slope over the bounding box” roof option. Multi-rectangle (L-shape/wing) footprints now always FOLLOW THE OUTLINE; a single rectangle is just one slope.'},
+    {t:'feat', text:'Roof weight: the roof section now shows the total weight of the roof framing (and its piece count) alongside the per-wall weights.'},
+    {t:'feat', text:'Every piece now has a NUMBER. Click a piece to see its “#” in the inspector, or type a number into the “Find #” box (top-right) to highlight that piece and pop its info — makes it easy to point at one exact stick. (Numbers are stable for a given design; they re-number if you change walls/openings/roof.)'},
+    {t:'fix', text:'Closed the gap between the two high-eave top plates over an interior divider: the eave cap now runs CONTINUOUSLY across the divider (it’s the topmost eave plate — the 4x6 beam is just above it, the divider’s gable plate just below) instead of each side butting the divider faces and leaving a 3.5" gap between them.'},
+    {t:'fix', text:'Cut-list LENGTH now reports the ACTUAL length of each board (its long dimension / slope length) instead of the vertical or horizontal span — profiled roof pieces (rafters, the 4x6 beam, rake/gable plates, gable studs) were reporting their y-span.'},
+    {t:'fix', text:'Reverted the high-eave top plate to BUTT the divider’s gable plate (the divider is a gable wall capped by its own sloped plate), instead of lapping over it.'},
+    {t:'fix', text:'Fixed a center-gable stud clipping a perpendicular eave stud: the redundant eave stud sitting inside the divider beam is dropped (the gable stud stays).'},
+    {t:'fix', text:'Exterior roof corners: corner-post studs are now all capped FLAT at the eave-cap underside (the eave plate caps the whole corner post) instead of the rake-side studs stopping short under the sloped rake plate and showing exposed top end grain. Cap corner-reach also keys off the actual rake wall, not just the footprint extremes.'},
+    {t:'change', text:'Added an “AI-built, not engineered” disclaimer on the page.'},
+  ]},
+  {v:'1.8.29', date:'2026-06-29', notes:[
+    {t:'fix', text:'High-eave top plate now reaches the END of the center (divider) wall the same way it reaches the outside walls. The 4x6 divider beam sits ABOVE the eave plate (rests on it), so there’s no clip — the plate now LAPS over the divider (the longer eave wall runs across to the beam’s far face, the shorter trims there). Reverts the v1.8.27 “butt the beam” cut, which was based on a bounding-box overlap and wrongly left a gap over the divider.'},
+  ]},
+  {v:'1.8.28', date:'2026-06-28', notes:[
+    {t:'fix', text:'Divider END-junction tee post (where the divider wall ends into an eave): the built-up post was landing on the wrong side of the divider (~3.5" toward the main room, off the 4x6 beam). addPartitionPost now picks the footprint side from the partition wall’s BODY direction, not its extend direction (which is reversed at end-junctions) — so the post centers on the divider beam.'},
+  ]},
+  {v:'1.8.27', date:'2026-06-28', notes:[
+    {t:'fix', text:'Middle corner top plate: the high-eave knee cap was clipping straight through the 4x6 shared-wall beam; it now BUTTS the beam (the shared wall’s top member) on each side instead of passing through it.'},
+    {t:'fix', text:'Partition-tee post on a divider wall: the nailer stud now sits CENTRED on the through-wall body (under the divider beam) instead of off at the far face — so the T-junction stud group lines up on the same line as the 4x6 beam above it.'},
+  ]},
+  {v:'1.8.26', date:'2026-06-28', notes:[
+    {t:'change', text:'Removed the separate BOTTOM gable plate everywhere (shed-outline rake walls AND gable-end framing): the wall’s double top plate now serves as the bottom plate, so the vertical gable studs seat directly on the second top plate (and the sloped rake plate’s low-end feather now dies into H, the top-plate top).'},
+  ]},
+  {v:'1.8.25', date:'2026-06-28', notes:[
+    {t:'fix', text:'Corner meshing: (1) roof corner posts no longer clip up through the knee cap — each replicated corner stud now stops under whatever sits above it (knee cap underside on the knee side, sloped rake-plate underside on the rake side, the lower of the two), so studs butt the plates cleanly; (2) the sloped rake (gable) plate now extends to the wall edge to BUTT the knee cap where it ends at a raised knee, closing the 0.75" inset gap so the gable plate and upper plate meet. Together the studs + both plates carry the corner up to the top-plate top as a solid exterior right angle.'},
+  ]},
+  {v:'1.8.24', date:'2026-06-28', notes:[
+    {t:'fix', text:'The roof corner post (replicated up from the wall) now also forms at the MIDDLE corner — the interior junction where the shared wall ends at the high eave — not just the exterior corners. Corner detection now covers every rake-wall end with a raised knee (exterior + shared-wall ends), and the knee end stud is skipped wherever any such corner post covers it.'},
+  ]},
+  {v:'1.8.23', date:'2026-06-28', notes:[
+    {t:'fix', text:'Corrected the corner top-plate extension: it’s the KNEE WALL’s cap plate (the upper roof plate) that now runs out over the corner post to the exterior corner (the rake wall’s outer face, aMin/aMax) — the a-direction — capping the corner like the wall plate below. Reverted the v1.8.22 sloped-rake-plate extension, which ran the wrong way.'},
+  ]},
+  {v:'1.8.22', date:'2026-06-28', notes:[
+    {t:'fix', text:'Roof corner cleanup: the knee wall no longer places its END stud where an exterior corner post already sits (kills the overlap), and the sloped rake (top) plate now EXTENDS over the corner to the knee wall’s outer face — capping the corner post — at every exterior end that meets a raised knee wall.'},
+  ]},
+  {v:'1.8.21', date:'2026-06-28', notes:[
+    {t:'fix', text:'Roof exterior corners now use the SAME corner style as the wall below them: instead of ad-hoc facing studs, each wall corner post is replicated straight up (same positions + orientation) from the top plate to the rafter underside — so the roof corner sits directly on the wall corner and closes the identical exterior 90°.'},
+  ]},
+  {v:'1.8.20', date:'2026-06-28', notes:[
+    {t:'fix', text:'Subfascia no longer spills a tiny stub past the shared beam (the eave was extending half a rafter past the boundary onto the other rectangle’s slope, reading as a clip). Where a beam sits at an eave’s end, the fascia now butts the beam and stops.'},
+  ]},
+  {v:'1.8.19', date:'2026-06-28', notes:[
+    {t:'fix', text:'The shared-wall 4x6 beam now gets the SAME birdsmouth seats + overhang tails as the rafters (it was a straight stick). And the subfascia no longer clips into it: each beam tail is capped by exactly one eave (end grain), and EVERY other eave whose run overlaps the beam butts its side — fixes the high-side eave that was running into the beam.'},
+  ]},
+  {v:'1.8.18', date:'2026-06-28', notes:[
+    {t:'fix', text:'The eave that caps a shared-beam tail now EXTENDS to fully cap the beam’s end grain — so the deep eave reaches out over the notch to cover the whole 4x6 tail (was only butting it where they happened to overlap). The eave the beam passes through still splits to butt the beam’s side (no clip-through).'},
+  ]},
+  {v:'1.8.17', date:'2026-06-28', notes:[
+    {t:'fix', text:'Shared-wall 4x6 beam now spans the SAME eave-to-eave length as the long (main) rafters. Subfascia treats it like any rafter: the eaves at the beam’s tail ENDS butt its end grain uninterrupted (no split), and ONLY the eave the beam PASSES THROUGH (the shallower stepped eave) is split to butt its side.'},
+  ]},
+  {v:'1.8.16', date:'2026-06-28', notes:[
+    {t:'fix', text:'Subfascia reworked to the real eave detail: it now sits just OUTBOARD and BUTTS the rafter tail ends (no longer overlaps/clips the rafters), and its TOP edge is clipped to the roof plane (sloped) so a flat sheet of sheathing lays over rafters + fascia. The shared-wall 4x6 beam now overhangs only the LOW eave (stops at the high wall), and only that LOW-side subfascia is split to butt it.'},
+  ]},
+  {v:'1.8.15', date:'2026-06-28', notes:[
+    {t:'feat', text:'The single rafter over a SHARED gable plate (the interior rake wall between two rectangles) is now a 4x6 on edge spanning the whole plate eave-to-eave — a beam carrying the junction — instead of a thin 2x rafter. The eave subfascia is split to BUTT against the 4x6 on each side where it crosses.'},
+  ]},
+  {v:'1.8.14', date:'2026-06-28', notes:[
+    {t:'fix', text:'Roof exterior corners now finish FLUSH: the outer corner stud is placed at b=t−h (spanning to the exterior corner edge, presenting both wall faces) and the inner at the corner — matching the wall corner post (addCornerPost 3stud A(0)+A(t−h)) instead of the mid-wall spacing, so the corner closes a true exterior right angle aligned with the wall corner below.'},
+  ]},
+  {v:'1.8.13', date:'2026-06-28', notes:[
+    {t:'fix', text:'Outline-mode rake/gable plates: the sloped top plate ran the full wall width, so near the low eave its low end dipped BELOW the wall top plate. It’s now clipped and MITERED to a feather where the slope meets the top-plate height (H+plate), so the low end dies cleanly into the top plate; the bottom gable plate carries to the same point.'},
+    {t:'feat', text:'Outline-mode roof EXTERIOR corners now finish as 3-stud corners: where an exterior rake wall meets a raised knee wall, two facing rake studs fill the corner square (the knee wall’s end stud is the perpendicular third), closing the exterior right angle.'},
+  ]},
+  {v:'1.8.12', date:'2026-06-28', notes:[
+    {t:'fix', text:'Outline-mode rake overhang now matches the single-rectangle shed: the eave SUBFASCIA extends to the barge (rake-overhang) outer faces at the exterior rake ends, and the lookout blocking is NOTCHED into the END (rake) rafter’s top edge (3.5" along the slope × 1.5" deep) so it drops in flush — same form as the single roof.'},
+  ]},
+  {v:'1.8.11', date:'2026-06-28', notes:[
+    {t:'feat', text:'Follow-outline shed now overhangs in BOTH directions: the rafters already overhung at the eaves (across the slope); added the RAKE overhang (along the slope) — a barge (fly) rafter past each exterior rake wall, clipped to the footprint there, with roof-plane lookouts back to the inboard rafters.'},
+  ]},
+  {v:'1.8.10', date:'2026-06-28', notes:[
+    {t:'feat', text:'Outline-mode rake/gable walls now get a horizontal BOTTOM gable plate sitting atop each wall’s top plate (incl. the shared/middle wall), with the gable studs seated on it — so the gable framing actually sits on the end plates (was just studs + the sloped top plate).'},
+  ]},
+  {v:'1.8.9', date:'2026-06-28', notes:[
+    {t:'fix', text:'Follow-outline framing now sits ON the walls. It referenced wall reference-lines (the inner faces on a right-turn loop), so rafters seated ~3.5" inside the plates and the rake/gable studs floated off to one side — most visibly at the shared wall between two rectangles, where the gable studs landed on the wrong side. Now everything references the wall BODY (via each wall’s thickness direction), so the shared wall carries a single set of gable studs/plates and rafters bear on the plates.'},
+  ]},
+  {v:'1.8.8', date:'2026-06-28', notes:[
+    {t:'feat', text:'Follow-the-outline shed mode is fleshed out: stepped SUBFASCIA along every eave (follows the outline’s steps) and sloped RAKE-WALL INFILL (rake plate + mitered studs) on every wall running across the slope, including interior/shared walls. (Rake overhang + lookouts for this mode are still to come.)'},
+  ]},
+  {v:'1.8.7', date:'2026-06-28', notes:[
+    {t:'feat', text:'Multi-rectangle shed roofs get a STRATEGY SELECTOR (One slope over bounding box · Follow the outline · One per rectangle — the last is still coming).'},
+    {t:'feat', text:'FOLLOW-THE-OUTLINE option: each rafter is clipped to the actual footprint at its position (so an L-shape isn’t roofed over its empty notch), and the bearing walls step up the slope as knee walls. (Subfascia, rake-wall infill & rake overhang for this mode are still to come.)'},
+  ]},
+  {v:'1.8.6', date:'2026-06-28', notes:[
+    {t:'feat', text:'SHED roofs can now be built on MULTI-RECTANGLE footprints (L-shapes, wings, partitioned boxes) — not just a single 4-wall rectangle. First option: one continuous slope over the footprint’s bounding rectangle. (Per-rectangle and follow-the-outline options are coming.)'},
+    {t:'fix', text:'wallsClosed() now recognizes mid-wall tees, so a closed footprint with interior/branching walls reads as enclosed and shows roof options.'},
+  ]},
+  {v:'1.8.5', date:'2026-06-28', notes:[
+    {t:'fix', text:'The app now opens in the Wall view by default (was Structure). A returning session still restores whichever mode you last used.'},
+  ]},
+  {v:'1.8.4', date:'2026-06-27', notes:[
+    {t:'feat', text:'Shed roofs get a "Flip slope" toggle to swap which side is the high wall vs the low wall (mirrors the whole slope: rafters, knee wall, rake infill, lookouts, subfascia).'},
+  ]},
+  {v:'1.8.3', date:'2026-06-27', notes:[
+    {t:'fix', text:'Shed high knee wall now runs corner-to-corner: the cap plate spans the full high wall and the end studs are flush with the side-wall exteriors, so each end knee stud and the cap plate above it form a clean exterior right angle at the corner (was inset, with the end stud poking past the plate).'},
+  ]},
+  {v:'1.8.2', date:'2026-06-26', notes:[
+    {t:'fix', text:'Rake/gable infill studs now sit fully UNDER the sloped top (rake) plate so the plate caps every stud — including the tallest at the high corner (per shed/rake-wall framing practice). Fixes the shed rake studs poking past the end of the plate.'},
+  ]},
+  {v:'1.8.1', date:'2026-06-26', notes:[
+    {t:'feat', text:'Shed roofs now get a RAKE OVERHANG too — barge (fly) rafters on both side walls plus roof-plane lookouts notched into the end (rake) rafters, and the eave subfascia runs out flush to the barge. Matches the gable rake.'},
+  ]},
+  {v:'1.8', date:'2026-06-26', notes:[
+    {t:'feat', text:'SHED / MONO-PITCH roofs. Rafters slope from the low wall up to the high wall (raised by a knee wall) with birdsmouths on both walls and overhang tails at both eaves; sloped rake-wall infill (mitered studs + rake plate) on the side walls; and subfascia at both eaves. Pick "Shed / mono-pitch" as the roof type. (Rake overhang + ceiling joists for shed are still to come.)'},
+  ]},
+  {v:'1.7.4', date:'2026-06-26', notes:[
+    {t:'fix', text:'Ceiling joists are now 2x4 (was 2x6).'},
+  ]},
+  {v:'1.7.3', date:'2026-06-26', notes:[
+    {t:'fix', text:'Gable studs are now MITERED at the top (cut to the slope) to sit flush against the diagonal top gable plates, and the two top gable plates now MEET AT THE APEX with plumb end cuts (built as cut profiles). Gable studs are also symmetric about the peak.'},
+  ]},
+  {v:'1.7.2', date:'2026-06-26', notes:[
+    {t:'fix', text:'Rafters are now laid out EVENLY SPACED and SYMMETRIC about the centre (≤ o.c.), with a real rafter at each gable wall — so the roof is symmetric and the lookouts land on real rafters at both gable ends (fixes lookouts that extended unequally and clipped through the off-grid rafter on one side).'},
+  ]},
+  {v:'1.7.1', date:'2026-06-26', notes:[
+    {t:'feat', text:'Added sloped TOP gable plates capping the gable studs — lying flat in each roof slope (like the bottom gable plate) and mating at the bottom of the ridge board; gable studs now run between the bottom and top gable plates.'},
+  ]},
+  {v:'1.7', date:'2026-06-26', notes:[
+    {t:'feat', text:'Added GABLE-END framing — a gable plate on the gable wall’s top plate plus gable studs filling the triangle up to the underside of the penultimate (gable) rafter, at each gable end.'},
+    {t:'fix', text:'Subfascia now runs to the barge (final) rafters’ outer faces, ending flush with the rake to form a clean right-angle corner.'},
+  ]},
+  {v:'1.6', date:'2026-06-26', notes:[
+    {t:'feat', text:'Added SUBFASCIA — a board nailed across the plumb-cut rafter tails along each eave, covering the tail (the barge rafter serves as the rake board).'},
+    {t:'feat', text:'Added COLLAR TIES — 2x4s connecting opposing rafter pairs in the upper third of the roof (every other interior rafter) to resist ridge separation/uplift.'},
+  ]},
+  {v:'1.5.3', date:'2026-06-26', notes:[
+    {t:'fix', text:'Only the MIDDLE (gable) rafter is notched for each lookout now; the lookout’s end grain butts the barge and the second rafter the same way (no longer notching the second rafter).'},
+    {t:'fix', text:'Roof now references the true EXTERIOR wall envelope (accounts for wall thickness & loop direction), so ceiling joists sit on the OUTER edges of the eave plates and the rafter eaves/heels land correctly for both left- and right-turn wall loops.'},
+  ]},
+  {v:'1.5.2', date:'2026-06-26', notes:[
+    {t:'fix', text:'Ridge board now reaches the barge (last) rafters’ outer faces, so the final rafters meet it at the apex even over the rake overhang.'},
+    {t:'fix', text:'Lookouts now lie IN THE ROOF PLANE (matching the rafter slope), top flush with the rafter tops, with their end grain meeting the rafter tops.'},
+    {t:'feat', text:'The gable rafter and the second rafter are now NOTCHED to receive each lookout (3.5" along the slope, 1.5" deep), so the lookout drops in flush instead of overlapping.'},
+  ]},
+  {v:'1.5.1', date:'2026-06-26', notes:[
+    {t:'fix', text:'Roof rafters now default to 2x6 (was 2x8).'},
+    {t:'fix', text:'Lookouts corrected to the standard "notched into the second rafter" method — each runs from the barge rafter, over the gable rafter, to the first interior rafter, flush with the rafter tops, a few down each slope. Removed the bogus lookout that sat on top of the ridge.'},
+  ]},
+  {v:'1.5', date:'2026-06-26', notes:[
+    {t:'feat', text:'Roof rafters are now CUT profiles instead of plain boxes: a PLUMB cut at the ridge so they mate the ridge board at the apex, a BIRDSMOUTH (seat + heel) where they bear on the top plate, and a plumb tail at the eave (cut lines now visible).'},
+    {t:'feat', text:'Rake (gable-end) overhang: the ridge now extends past the gable walls, framed with barge (fly) rafters and level lookout blocking — overhang in both directions.'},
+  ]},
+  {v:'1.4.1', date:'2026-06-26', notes:[
+    {t:'fix', text:'California corner rebuilt to the real advanced-framing detail: two studs end the walls (exterior L) plus a single FLAT backer turned 90° to back the leaving wall’s drywall, with the corner cavity left OPEN for insulation. Previously it packed two perpendicular studs and had no exterior corner stud for the through wall.'},
+  ]},
+  {v:'1.4', date:'2026-06-26', notes:[
+    {t:'feat', text:'Roof framing — GABLE roofs now generate on a closed rectangular wall loop: common rafters (with overhang), a ridge board, and ceiling-joist ties, sized from the horizontal run and pitch. Roof controls: type, pitch (rise/12), overhang, rafter size & O.C.'},
+    {t:'feat', text:'Roof members (rafter / ridge / tie) flow through the cut list, buy-list and 3D like everything else.'},
+    {t:'fix', text:'Roof remains a no-op unless the walls form a closed rectangle; shed/hip/flat are explicitly marked "soon" and build nothing. Birdsmouth notch, gable-end studs, and span-table auto-sizing are still TODO (heuristic, not engineered).'},
+  ]},
+  {v:'1.3', date:'2026-06-26', desc:'Stable release — consolidates all 1.1–1.2.2 work into a frozen stable snapshot.', notes:[]},
+  {v:'1.2.2', date:'2026-06-26', notes:[
+    {t:'feat', text:'Changelog entries are now labelled NEW (feature) or FIX.'},
+  ]},
+  {v:'1.2.1', date:'2026-06-26', notes:[
+    {t:'fix', text:'Solid-header dropdown now follows the wall stud size: 2x6 walls show 6x6–6x12 options (was always 4x), matching the timber actually built. Switching stud size updates the options live.'},
+  ]},
+  {v:'1.2', date:'2026-06-26', notes:[
+    {t:'feat', text:'Solid 4x/6x header option — a single timber that fills the wall thickness (4x on 2x4 walls, 6x on 2x6), chosen alongside the built-up 2x in the header dropdown.'},
+    {t:'feat', text:'New lumber sizes: 2x12, 4x8 / 4x10 / 4x12, and 6x6 / 6x8 / 6x10 / 6x12.'},
+    {t:'feat', text:'In-app changelog — click the version badge to open it.'},
+    {t:'fix', text:'Removed the 4x vertical-post option (not a real light-framing detail); opening sides are king + jack again.'},
+  ]},
+  {v:'1.1', date:'2026-06-26', notes:[
+    {t:'feat', text:'Per-opening header-size selector and a load-bearing toggle (non-bearing gets a single flat 2x).'},
+    {t:'fix', text:'Opening headers rebuilt as plies laid ON EDGE with a ½″ plywood spacer, flush to the wall — replacing the structurally-wrong two flat-sistered 2x4s.'},
+    {t:'fix', text:'Confined cripples and the window sill to the clear opening so a grid-aligned cripple can no longer clip a jack.'},
+  ]},
+  {v:'1.0', date:'2026-06-26', desc:'Stable baseline — frozen copy kept at ../lumber-framer-1.0-stable.', notes:[
+    {t:'fix', text:'Corner & T / partition-tee framing: clean butt-joint corners and no clipping at junctions.'},
+    {t:'fix', text:'The butting (child) tee wall now gets its own sister stud against the post (was missing).'},
+  ]},
+];
+const APP_VERSION=CHANGELOG[0].v;
+function renderChangelog(){
+  const el=document.getElementById('clBody'); if(!el) return;
+  const TAG={feat:['NEW','var(--good)'], fix:['FIX','var(--warn)']};
+  const chip=(lbl,col)=>`<span style="flex:none;width:30px;text-align:center;font-size:8px;font-weight:700;letter-spacing:.06em;color:${col};border:1px solid ${col};border-radius:3px;padding:1px 0;">${lbl}</span>`;
+  el.innerHTML=
+    `<div style="display:flex;gap:10px;padding:8px 0 2px;font-size:9px;color:var(--faint);">legend: ${chip('NEW','var(--good)')} new feature ${chip('FIX','var(--warn)')} fix</div>`+
+    CHANGELOG.map(r=>`
+    <div style="padding:12px 0;border-bottom:1px solid var(--line);">
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px;">
+        <span style="font-family:var(--sans);font-weight:700;font-size:13px;color:var(--accent);">v${r.v}</span>
+        ${r.v===APP_VERSION?'<span style="font-size:8.5px;font-weight:600;color:var(--good);border:1px solid var(--good);border-radius:4px;padding:1px 5px;letter-spacing:.05em;">CURRENT</span>':''}
+        <span style="margin-left:auto;font-size:10px;color:var(--faint);">${r.date}</span>
+      </div>
+      ${r.desc?`<div style="font-size:10.5px;color:var(--faint);margin:-2px 0 7px;">${r.desc}</div>`:''}
+      <ul style="margin:0;padding-left:0;list-style:none;font-size:11.5px;line-height:1.5;color:var(--dim);">
+        ${r.notes.map(n=>{const[lbl,col]=TAG[n.t]||TAG.feat; return `<li style="display:flex;gap:8px;margin-bottom:5px;align-items:baseline;">${chip(lbl,col)}<span>${n.text}</span></li>`;}).join('')}
+      </ul>
+    </div>`).join('');
+}
+(function initChangelog(){
+  const badge=document.getElementById('verBadge'), modal=document.getElementById('changelog');
+  if(badge){ badge.textContent='v'+APP_VERSION+' · STABLE';
+    badge.addEventListener('click',()=>{ renderChangelog(); if(modal) modal.style.display='flex'; }); }
+  if(modal) modal.addEventListener('click',e=>{ if(e.target.id==='changelog'||e.target.classList.contains('cl-x')) modal.style.display='none'; });
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&modal) modal.style.display='none'; });
+})();
+
+/* ===== boot sequence (runs once on load, in order) =====
+   initThree (WebGL) → syncUI (controls ← P) → renderMyPresets (preset dropdown) →
+   renderWalls (wall cards) → regen (build model + cut list + 3D) → frame (fit camera).
+   The version badge's static HTML text is also set authoritatively at runtime by
+   initChangelog() to 'v'+APP_VERSION+' · EXPERIMENTAL' (APP_VERSION = CHANGELOG[0].v),
+   so the badge always reflects the changelog; keep the static text in sync as a fallback. */
+initThree();
+syncUI();
+renderMyPresets();
+renderWalls();
+regen();
+frame();
+</script>
+</body>
+</html>

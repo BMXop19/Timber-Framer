@@ -1,0 +1,12 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+.vscode/
+.idea/
+
+# exported design presets and stray downloads
+timberframer-*presets*.json
+tf_*.jpg
+*.crdownload
