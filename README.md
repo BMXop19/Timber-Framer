@@ -44,3 +44,7 @@ Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING
 ## License
 
 [MIT](LICENSE) © 2026 BMXop19
+
+---
+
+> 🤖 _Authorship note: this README was written by an AI assistant._
