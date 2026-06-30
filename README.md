@@ -2,6 +2,8 @@
 
 A free, open-source, single-file framing generator for **stud walls and roofs**. Lay out a shed or small structure in your browser and get a live 3D frame, a piece-by-piece cut list, and a lumber buy-list — no install, no account, no server.
 
+**Current release: v1.11** · [Changelog](CHANGELOG.md)
+
 ![Timber·Framer — a gable shed frame with walls, openings, rafters, ridge and ceiling joists](docs/hero.jpg)
 
 > ⚠️ **Not engineered.** Timber·Framer is a heuristic design aid, **not** a substitute for a structural engineer or your local building department. It does not certify spans, headers, uplift, or connections. Verify everything against the building code and span tables for your species, grade, spacing, and snow/wind loads before you build.

@@ -1,0 +1,657 @@
+[
+  {
+    "v": "1.11",
+    "date": "2026-06-29",
+    "notes": [
+      {
+        "t": "change",
+        "text": "Buy list now stocks 92⅝\" PRE-CUT STUDS. Full-height studs (≥84\") are drawn from the standard 92⅝\" pre-cut instead of cutting down a 96\" board — a real waste cut (e.g. ~142\" / ~12 ft saved on a small gable shed, studs dropping from 4½\" of drop each to 1⅛\"). Short offcuts still come from regular 8/10/12/16 ft boards, so pre-cuts aren’t spent on blocking."
+      },
+      {
+        "t": "change",
+        "text": "Cut-list panel readability pass: clearer section breaks, the totals now sit in a summary box, the members table has size tags + bold quantities + zebra rows, and the buy list is grouped per size with each quantity × stock length aligned and bold (was a cramped comma-separated line)."
+      },
+      {
+        "t": "feat",
+        "text": "Click the “Members” or “Buy list” header in the cut-list panel to collapse / expand that section (chevron shows the state) — scan a long buy list without scrolling past the whole members table, and vice-versa. A collapsed header shows a count summary (e.g. “Members · 183 pcs”, “Buy list · 90 boards”)."
+      }
+    ]
+  },
+  {
+    "v": "1.10",
+    "date": "2026-06-29",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Walls can be NAMED — type a name in the wall card’s header (defaults to “Wall N”). The name shows in every “Branch from” dropdown and in the piece inspector, so a big layout reads as rooms instead of numbers."
+      },
+      {
+        "t": "feat",
+        "text": "“⊙” (face) button on each wall card swings the camera SQUARE-ON to that wall (elevation-style), so you edit it head-on."
+      },
+      {
+        "t": "change",
+        "text": "Friendlier opening placement: an opening’s POSITION now has a reference selector — measure it FROM START, FROM END, or CENTERED — and sits on its own row, with the SIZE (width · height · sill) on a separate labelled row, so it’s obvious which controls move the opening vs resize it."
+      },
+      {
+        "t": "fix",
+        "text": "Gable collar ties no longer clip the ceiling joists on low-slope roofs — they’re lifted to keep ≥1″ above the joist tops, and where the slope is too shallow for one to tuck under the ridge at all, it’s omitted instead of clipping."
+      },
+      {
+        "t": "change",
+        "text": "The per-wall head-on view control is now a filled, labelled “⊙ Face” button (was a faint outline icon) so it’s easy to spot."
+      },
+      {
+        "t": "fix",
+        "text": "The CALIFORNIA junction-stud option is disabled (greyed) and marked “broken, needs fixing” — it’s a known-broken technique, so it can no longer be picked and any wall still set to it falls back to a 3-stud corner."
+      }
+    ]
+  },
+  {
+    "v": "1.9",
+    "date": "2026-06-29",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "SHED / mono-pitch roofs now get level CEILING JOISTS at the low-wall plate height (a flat surface for a drywall ceiling), one per rafter bay — the same way the gable roof does. Each joist beds fully onto BOTH eave top plates (out to the outer faces) and is shifted in line to sit BESIDE the knee studs and rafters rather than clip through them; works for single-rectangle and follow-the-outline (L-shape) sheds, either slope direction."
+      },
+      {
+        "t": "fix",
+        "text": "Where a ceiling-joist bay spans an interior divider wall, instead of one joist landing on the divider (clipping its gable studs) there are now TWO joists, one tight against each room’s side of the divider. Plus a corner-backing joist tight against each EXTERIOR rake (end) wall — so the ceiling-drywall edge is backed at the room ends and the divider in every room. Each of those corner-backing joists is slid sideways so its FACE bears against (nails to) the high-eave corner post — kept whole, no notches."
+      },
+      {
+        "t": "change",
+        "text": "Focused the app on WALL + ROOF framing: removed the Structure and Shelving tabs (those move to a separate project) — it now opens straight into the wall/roof builder with no mode switcher."
+      },
+      {
+        "t": "change",
+        "text": "Removed the “one slope over the bounding box” roof option. Multi-rectangle (L-shape/wing) footprints now always FOLLOW THE OUTLINE; a single rectangle is just one slope."
+      },
+      {
+        "t": "feat",
+        "text": "Roof weight: the roof section now shows the total weight of the roof framing (and its piece count) alongside the per-wall weights."
+      },
+      {
+        "t": "feat",
+        "text": "Every piece now has a NUMBER. Click a piece to see its “#” in the inspector, or type a number into the “Find #” box (top-right) to highlight that piece and pop its info — makes it easy to point at one exact stick. (Numbers are stable for a given design; they re-number if you change walls/openings/roof.)"
+      },
+      {
+        "t": "fix",
+        "text": "Closed the gap between the two high-eave top plates over an interior divider: the eave cap now runs CONTINUOUSLY across the divider (it’s the topmost eave plate — the 4x6 beam is just above it, the divider’s gable plate just below) instead of each side butting the divider faces and leaving a 3.5\" gap between them."
+      },
+      {
+        "t": "fix",
+        "text": "Cut-list LENGTH now reports the ACTUAL length of each board (its long dimension / slope length) instead of the vertical or horizontal span — profiled roof pieces (rafters, the 4x6 beam, rake/gable plates, gable studs) were reporting their y-span."
+      },
+      {
+        "t": "fix",
+        "text": "Reverted the high-eave top plate to BUTT the divider’s gable plate (the divider is a gable wall capped by its own sloped plate), instead of lapping over it."
+      },
+      {
+        "t": "fix",
+        "text": "Fixed a center-gable stud clipping a perpendicular eave stud: the redundant eave stud sitting inside the divider beam is dropped (the gable stud stays)."
+      },
+      {
+        "t": "fix",
+        "text": "Exterior roof corners: corner-post studs are now all capped FLAT at the eave-cap underside (the eave plate caps the whole corner post) instead of the rake-side studs stopping short under the sloped rake plate and showing exposed top end grain. Cap corner-reach also keys off the actual rake wall, not just the footprint extremes."
+      },
+      {
+        "t": "change",
+        "text": "Added an “AI-built, not engineered” disclaimer on the page."
+      }
+    ]
+  },
+  {
+    "v": "1.8.29",
+    "date": "2026-06-29",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "High-eave top plate now reaches the END of the center (divider) wall the same way it reaches the outside walls. The 4x6 divider beam sits ABOVE the eave plate (rests on it), so there’s no clip — the plate now LAPS over the divider (the longer eave wall runs across to the beam’s far face, the shorter trims there). Reverts the v1.8.27 “butt the beam” cut, which was based on a bounding-box overlap and wrongly left a gap over the divider."
+      }
+    ]
+  },
+  {
+    "v": "1.8.28",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Divider END-junction tee post (where the divider wall ends into an eave): the built-up post was landing on the wrong side of the divider (~3.5\" toward the main room, off the 4x6 beam). addPartitionPost now picks the footprint side from the partition wall’s BODY direction, not its extend direction (which is reversed at end-junctions) — so the post centers on the divider beam."
+      }
+    ]
+  },
+  {
+    "v": "1.8.27",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Middle corner top plate: the high-eave knee cap was clipping straight through the 4x6 shared-wall beam; it now BUTTS the beam (the shared wall’s top member) on each side instead of passing through it."
+      },
+      {
+        "t": "fix",
+        "text": "Partition-tee post on a divider wall: the nailer stud now sits CENTRED on the through-wall body (under the divider beam) instead of off at the far face — so the T-junction stud group lines up on the same line as the 4x6 beam above it."
+      }
+    ]
+  },
+  {
+    "v": "1.8.26",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "change",
+        "text": "Removed the separate BOTTOM gable plate everywhere (shed-outline rake walls AND gable-end framing): the wall’s double top plate now serves as the bottom plate, so the vertical gable studs seat directly on the second top plate (and the sloped rake plate’s low-end feather now dies into H, the top-plate top)."
+      }
+    ]
+  },
+  {
+    "v": "1.8.25",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Corner meshing: (1) roof corner posts no longer clip up through the knee cap — each replicated corner stud now stops under whatever sits above it (knee cap underside on the knee side, sloped rake-plate underside on the rake side, the lower of the two), so studs butt the plates cleanly; (2) the sloped rake (gable) plate now extends to the wall edge to BUTT the knee cap where it ends at a raised knee, closing the 0.75\" inset gap so the gable plate and upper plate meet. Together the studs + both plates carry the corner up to the top-plate top as a solid exterior right angle."
+      }
+    ]
+  },
+  {
+    "v": "1.8.24",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "The roof corner post (replicated up from the wall) now also forms at the MIDDLE corner — the interior junction where the shared wall ends at the high eave — not just the exterior corners. Corner detection now covers every rake-wall end with a raised knee (exterior + shared-wall ends), and the knee end stud is skipped wherever any such corner post covers it."
+      }
+    ]
+  },
+  {
+    "v": "1.8.23",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Corrected the corner top-plate extension: it’s the KNEE WALL’s cap plate (the upper roof plate) that now runs out over the corner post to the exterior corner (the rake wall’s outer face, aMin/aMax) — the a-direction — capping the corner like the wall plate below. Reverted the v1.8.22 sloped-rake-plate extension, which ran the wrong way."
+      }
+    ]
+  },
+  {
+    "v": "1.8.22",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Roof corner cleanup: the knee wall no longer places its END stud where an exterior corner post already sits (kills the overlap), and the sloped rake (top) plate now EXTENDS over the corner to the knee wall’s outer face — capping the corner post — at every exterior end that meets a raised knee wall."
+      }
+    ]
+  },
+  {
+    "v": "1.8.21",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Roof exterior corners now use the SAME corner style as the wall below them: instead of ad-hoc facing studs, each wall corner post is replicated straight up (same positions + orientation) from the top plate to the rafter underside — so the roof corner sits directly on the wall corner and closes the identical exterior 90°."
+      }
+    ]
+  },
+  {
+    "v": "1.8.20",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Subfascia no longer spills a tiny stub past the shared beam (the eave was extending half a rafter past the boundary onto the other rectangle’s slope, reading as a clip). Where a beam sits at an eave’s end, the fascia now butts the beam and stops."
+      }
+    ]
+  },
+  {
+    "v": "1.8.19",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "The shared-wall 4x6 beam now gets the SAME birdsmouth seats + overhang tails as the rafters (it was a straight stick). And the subfascia no longer clips into it: each beam tail is capped by exactly one eave (end grain), and EVERY other eave whose run overlaps the beam butts its side — fixes the high-side eave that was running into the beam."
+      }
+    ]
+  },
+  {
+    "v": "1.8.18",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "The eave that caps a shared-beam tail now EXTENDS to fully cap the beam’s end grain — so the deep eave reaches out over the notch to cover the whole 4x6 tail (was only butting it where they happened to overlap). The eave the beam passes through still splits to butt the beam’s side (no clip-through)."
+      }
+    ]
+  },
+  {
+    "v": "1.8.17",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Shared-wall 4x6 beam now spans the SAME eave-to-eave length as the long (main) rafters. Subfascia treats it like any rafter: the eaves at the beam’s tail ENDS butt its end grain uninterrupted (no split), and ONLY the eave the beam PASSES THROUGH (the shallower stepped eave) is split to butt its side."
+      }
+    ]
+  },
+  {
+    "v": "1.8.16",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Subfascia reworked to the real eave detail: it now sits just OUTBOARD and BUTTS the rafter tail ends (no longer overlaps/clips the rafters), and its TOP edge is clipped to the roof plane (sloped) so a flat sheet of sheathing lays over rafters + fascia. The shared-wall 4x6 beam now overhangs only the LOW eave (stops at the high wall), and only that LOW-side subfascia is split to butt it."
+      }
+    ]
+  },
+  {
+    "v": "1.8.15",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "The single rafter over a SHARED gable plate (the interior rake wall between two rectangles) is now a 4x6 on edge spanning the whole plate eave-to-eave — a beam carrying the junction — instead of a thin 2x rafter. The eave subfascia is split to BUTT against the 4x6 on each side where it crosses."
+      }
+    ]
+  },
+  {
+    "v": "1.8.14",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Roof exterior corners now finish FLUSH: the outer corner stud is placed at b=t−h (spanning to the exterior corner edge, presenting both wall faces) and the inner at the corner — matching the wall corner post (addCornerPost 3stud A(0)+A(t−h)) instead of the mid-wall spacing, so the corner closes a true exterior right angle aligned with the wall corner below."
+      }
+    ]
+  },
+  {
+    "v": "1.8.13",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Outline-mode rake/gable plates: the sloped top plate ran the full wall width, so near the low eave its low end dipped BELOW the wall top plate. It’s now clipped and MITERED to a feather where the slope meets the top-plate height (H+plate), so the low end dies cleanly into the top plate; the bottom gable plate carries to the same point."
+      },
+      {
+        "t": "feat",
+        "text": "Outline-mode roof EXTERIOR corners now finish as 3-stud corners: where an exterior rake wall meets a raised knee wall, two facing rake studs fill the corner square (the knee wall’s end stud is the perpendicular third), closing the exterior right angle."
+      }
+    ]
+  },
+  {
+    "v": "1.8.12",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Outline-mode rake overhang now matches the single-rectangle shed: the eave SUBFASCIA extends to the barge (rake-overhang) outer faces at the exterior rake ends, and the lookout blocking is NOTCHED into the END (rake) rafter’s top edge (3.5\" along the slope × 1.5\" deep) so it drops in flush — same form as the single roof."
+      }
+    ]
+  },
+  {
+    "v": "1.8.11",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Follow-outline shed now overhangs in BOTH directions: the rafters already overhung at the eaves (across the slope); added the RAKE overhang (along the slope) — a barge (fly) rafter past each exterior rake wall, clipped to the footprint there, with roof-plane lookouts back to the inboard rafters."
+      }
+    ]
+  },
+  {
+    "v": "1.8.10",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Outline-mode rake/gable walls now get a horizontal BOTTOM gable plate sitting atop each wall’s top plate (incl. the shared/middle wall), with the gable studs seated on it — so the gable framing actually sits on the end plates (was just studs + the sloped top plate)."
+      }
+    ]
+  },
+  {
+    "v": "1.8.9",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Follow-outline framing now sits ON the walls. It referenced wall reference-lines (the inner faces on a right-turn loop), so rafters seated ~3.5\" inside the plates and the rake/gable studs floated off to one side — most visibly at the shared wall between two rectangles, where the gable studs landed on the wrong side. Now everything references the wall BODY (via each wall’s thickness direction), so the shared wall carries a single set of gable studs/plates and rafters bear on the plates."
+      }
+    ]
+  },
+  {
+    "v": "1.8.8",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Follow-the-outline shed mode is fleshed out: stepped SUBFASCIA along every eave (follows the outline’s steps) and sloped RAKE-WALL INFILL (rake plate + mitered studs) on every wall running across the slope, including interior/shared walls. (Rake overhang + lookouts for this mode are still to come.)"
+      }
+    ]
+  },
+  {
+    "v": "1.8.7",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Multi-rectangle shed roofs get a STRATEGY SELECTOR (One slope over bounding box · Follow the outline · One per rectangle — the last is still coming)."
+      },
+      {
+        "t": "feat",
+        "text": "FOLLOW-THE-OUTLINE option: each rafter is clipped to the actual footprint at its position (so an L-shape isn’t roofed over its empty notch), and the bearing walls step up the slope as knee walls. (Subfascia, rake-wall infill & rake overhang for this mode are still to come.)"
+      }
+    ]
+  },
+  {
+    "v": "1.8.6",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "SHED roofs can now be built on MULTI-RECTANGLE footprints (L-shapes, wings, partitioned boxes) — not just a single 4-wall rectangle. First option: one continuous slope over the footprint’s bounding rectangle. (Per-rectangle and follow-the-outline options are coming.)"
+      },
+      {
+        "t": "fix",
+        "text": "wallsClosed() now recognizes mid-wall tees, so a closed footprint with interior/branching walls reads as enclosed and shows roof options."
+      }
+    ]
+  },
+  {
+    "v": "1.8.5",
+    "date": "2026-06-28",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "The app now opens in the Wall view by default (was Structure). A returning session still restores whichever mode you last used."
+      }
+    ]
+  },
+  {
+    "v": "1.8.4",
+    "date": "2026-06-27",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Shed roofs get a \"Flip slope\" toggle to swap which side is the high wall vs the low wall (mirrors the whole slope: rafters, knee wall, rake infill, lookouts, subfascia)."
+      }
+    ]
+  },
+  {
+    "v": "1.8.3",
+    "date": "2026-06-27",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Shed high knee wall now runs corner-to-corner: the cap plate spans the full high wall and the end studs are flush with the side-wall exteriors, so each end knee stud and the cap plate above it form a clean exterior right angle at the corner (was inset, with the end stud poking past the plate)."
+      }
+    ]
+  },
+  {
+    "v": "1.8.2",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Rake/gable infill studs now sit fully UNDER the sloped top (rake) plate so the plate caps every stud — including the tallest at the high corner (per shed/rake-wall framing practice). Fixes the shed rake studs poking past the end of the plate."
+      }
+    ]
+  },
+  {
+    "v": "1.8.1",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Shed roofs now get a RAKE OVERHANG too — barge (fly) rafters on both side walls plus roof-plane lookouts notched into the end (rake) rafters, and the eave subfascia runs out flush to the barge. Matches the gable rake."
+      }
+    ]
+  },
+  {
+    "v": "1.8",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "SHED / MONO-PITCH roofs. Rafters slope from the low wall up to the high wall (raised by a knee wall) with birdsmouths on both walls and overhang tails at both eaves; sloped rake-wall infill (mitered studs + rake plate) on the side walls; and subfascia at both eaves. Pick \"Shed / mono-pitch\" as the roof type. (Rake overhang + ceiling joists for shed are still to come.)"
+      }
+    ]
+  },
+  {
+    "v": "1.7.4",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Ceiling joists are now 2x4 (was 2x6)."
+      }
+    ]
+  },
+  {
+    "v": "1.7.3",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Gable studs are now MITERED at the top (cut to the slope) to sit flush against the diagonal top gable plates, and the two top gable plates now MEET AT THE APEX with plumb end cuts (built as cut profiles). Gable studs are also symmetric about the peak."
+      }
+    ]
+  },
+  {
+    "v": "1.7.2",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Rafters are now laid out EVENLY SPACED and SYMMETRIC about the centre (≤ o.c.), with a real rafter at each gable wall — so the roof is symmetric and the lookouts land on real rafters at both gable ends (fixes lookouts that extended unequally and clipped through the off-grid rafter on one side)."
+      }
+    ]
+  },
+  {
+    "v": "1.7.1",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Added sloped TOP gable plates capping the gable studs — lying flat in each roof slope (like the bottom gable plate) and mating at the bottom of the ridge board; gable studs now run between the bottom and top gable plates."
+      }
+    ]
+  },
+  {
+    "v": "1.7",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Added GABLE-END framing — a gable plate on the gable wall’s top plate plus gable studs filling the triangle up to the underside of the penultimate (gable) rafter, at each gable end."
+      },
+      {
+        "t": "fix",
+        "text": "Subfascia now runs to the barge (final) rafters’ outer faces, ending flush with the rake to form a clean right-angle corner."
+      }
+    ]
+  },
+  {
+    "v": "1.6",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Added SUBFASCIA — a board nailed across the plumb-cut rafter tails along each eave, covering the tail (the barge rafter serves as the rake board)."
+      },
+      {
+        "t": "feat",
+        "text": "Added COLLAR TIES — 2x4s connecting opposing rafter pairs in the upper third of the roof (every other interior rafter) to resist ridge separation/uplift."
+      }
+    ]
+  },
+  {
+    "v": "1.5.3",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Only the MIDDLE (gable) rafter is notched for each lookout now; the lookout’s end grain butts the barge and the second rafter the same way (no longer notching the second rafter)."
+      },
+      {
+        "t": "fix",
+        "text": "Roof now references the true EXTERIOR wall envelope (accounts for wall thickness & loop direction), so ceiling joists sit on the OUTER edges of the eave plates and the rafter eaves/heels land correctly for both left- and right-turn wall loops."
+      }
+    ]
+  },
+  {
+    "v": "1.5.2",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Ridge board now reaches the barge (last) rafters’ outer faces, so the final rafters meet it at the apex even over the rake overhang."
+      },
+      {
+        "t": "fix",
+        "text": "Lookouts now lie IN THE ROOF PLANE (matching the rafter slope), top flush with the rafter tops, with their end grain meeting the rafter tops."
+      },
+      {
+        "t": "feat",
+        "text": "The gable rafter and the second rafter are now NOTCHED to receive each lookout (3.5\" along the slope, 1.5\" deep), so the lookout drops in flush instead of overlapping."
+      }
+    ]
+  },
+  {
+    "v": "1.5.1",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Roof rafters now default to 2x6 (was 2x8)."
+      },
+      {
+        "t": "fix",
+        "text": "Lookouts corrected to the standard \"notched into the second rafter\" method — each runs from the barge rafter, over the gable rafter, to the first interior rafter, flush with the rafter tops, a few down each slope. Removed the bogus lookout that sat on top of the ridge."
+      }
+    ]
+  },
+  {
+    "v": "1.5",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Roof rafters are now CUT profiles instead of plain boxes: a PLUMB cut at the ridge so they mate the ridge board at the apex, a BIRDSMOUTH (seat + heel) where they bear on the top plate, and a plumb tail at the eave (cut lines now visible)."
+      },
+      {
+        "t": "feat",
+        "text": "Rake (gable-end) overhang: the ridge now extends past the gable walls, framed with barge (fly) rafters and level lookout blocking — overhang in both directions."
+      }
+    ]
+  },
+  {
+    "v": "1.4.1",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "California corner rebuilt to the real advanced-framing detail: two studs end the walls (exterior L) plus a single FLAT backer turned 90° to back the leaving wall’s drywall, with the corner cavity left OPEN for insulation. Previously it packed two perpendicular studs and had no exterior corner stud for the through wall."
+      }
+    ]
+  },
+  {
+    "v": "1.4",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Roof framing — GABLE roofs now generate on a closed rectangular wall loop: common rafters (with overhang), a ridge board, and ceiling-joist ties, sized from the horizontal run and pitch. Roof controls: type, pitch (rise/12), overhang, rafter size & O.C."
+      },
+      {
+        "t": "feat",
+        "text": "Roof members (rafter / ridge / tie) flow through the cut list, buy-list and 3D like everything else."
+      },
+      {
+        "t": "fix",
+        "text": "Roof remains a no-op unless the walls form a closed rectangle; shed/hip/flat are explicitly marked \"soon\" and build nothing. Birdsmouth notch, gable-end studs, and span-table auto-sizing are still TODO (heuristic, not engineered)."
+      }
+    ]
+  },
+  {
+    "v": "1.3",
+    "date": "2026-06-26",
+    "desc": "Stable release — consolidates all 1.1–1.2.2 work into a frozen stable snapshot.",
+    "notes": []
+  },
+  {
+    "v": "1.2.2",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Changelog entries are now labelled NEW (feature) or FIX."
+      }
+    ]
+  },
+  {
+    "v": "1.2.1",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Solid-header dropdown now follows the wall stud size: 2x6 walls show 6x6–6x12 options (was always 4x), matching the timber actually built. Switching stud size updates the options live."
+      }
+    ]
+  },
+  {
+    "v": "1.2",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Solid 4x/6x header option — a single timber that fills the wall thickness (4x on 2x4 walls, 6x on 2x6), chosen alongside the built-up 2x in the header dropdown."
+      },
+      {
+        "t": "feat",
+        "text": "New lumber sizes: 2x12, 4x8 / 4x10 / 4x12, and 6x6 / 6x8 / 6x10 / 6x12."
+      },
+      {
+        "t": "feat",
+        "text": "In-app changelog — click the version badge to open it."
+      },
+      {
+        "t": "fix",
+        "text": "Removed the 4x vertical-post option (not a real light-framing detail); opening sides are king + jack again."
+      }
+    ]
+  },
+  {
+    "v": "1.1",
+    "date": "2026-06-26",
+    "notes": [
+      {
+        "t": "feat",
+        "text": "Per-opening header-size selector and a load-bearing toggle (non-bearing gets a single flat 2x)."
+      },
+      {
+        "t": "fix",
+        "text": "Opening headers rebuilt as plies laid ON EDGE with a ½″ plywood spacer, flush to the wall — replacing the structurally-wrong two flat-sistered 2x4s."
+      },
+      {
+        "t": "fix",
+        "text": "Confined cripples and the window sill to the clear opening so a grid-aligned cripple can no longer clip a jack."
+      }
+    ]
+  },
+  {
+    "v": "1.0",
+    "date": "2026-06-26",
+    "desc": "Stable baseline — frozen copy kept at ../lumber-framer-1.0-stable.",
+    "notes": [
+      {
+        "t": "fix",
+        "text": "Corner & T / partition-tee framing: clean butt-joint corners and no clipping at junctions."
+      },
+      {
+        "t": "fix",
+        "text": "The butting (child) tee wall now gets its own sister stud against the post (was missing)."
+      }
+    ]
+  }
+]
