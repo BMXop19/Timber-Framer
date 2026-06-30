@@ -139,7 +139,7 @@ canvas{display:block;width:100%;height:100%;}
 /* ── Cut list panel ── */
 #cut{width:340px;min-width:280px;height:100%;overflow-y:auto;background:var(--p1);border-left:1px solid var(--line);padding:14px 16px 40px;}
 #cut h2{font-family:var(--sans);font-size:14px;font-weight:800;letter-spacing:.02em;margin-bottom:2px;}
-#rationale{font-size:11px;line-height:1.6;color:var(--dim);background:var(--p2);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:6px;padding:9px 11px;margin:10px 0 14px;}
+#rationale{font-size:11px;line-height:1.6;color:var(--dim);background:var(--p2);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:6px;padding:9px 11px;margin:10px 0 4px;}
 #rationale b{color:var(--ink);}
 table{width:100%;border-collapse:collapse;font-size:11.5px;}
 th{text-align:left;color:var(--faint);font-weight:500;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--line);padding:5px 4px;}
@@ -150,6 +150,27 @@ td .tag{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right
 .totline b{color:var(--ink);}
 .buy{font-size:11.5px;margin-top:4px;}
 .buy .b{display:flex;justify-content:space-between;padding:3px 4px;border-bottom:1px dashed var(--line);}
+/* cut-list readability: clearer section breaks + quantity/size styling */
+#cut .sec-hd{margin-top:20px;color:var(--dim);}
+.sec-toggle{cursor:pointer;user-select:none;display:flex;justify-content:space-between;align-items:center;}
+.sec-toggle:hover{color:var(--ink);}
+.sec-toggle::after{content:'▾';font-size:8px;color:var(--faint);}
+.sec-toggle.collapsed::after{content:'▸';}
+.sec-toggle.collapsed + .sec-body{display:none;}
+.sec-count{display:none;font-weight:400;color:var(--faint);letter-spacing:0;text-transform:none;}
+.sec-toggle.collapsed .sec-count{display:inline;}
+#cutTable tbody tr:nth-child(even){background:rgba(255,255,255,.022);}
+#cutTable td.qty{font-weight:700;color:var(--ink);}
+#cutTable td.len{color:var(--dim);}
+.sztag{font-family:var(--mono);font-size:10px;color:var(--dim);background:var(--p2);border:1px solid var(--line);border-radius:3px;padding:1px 5px;white-space:nowrap;}
+#totals{margin:12px 0 2px;padding:6px 11px;background:var(--p2);border:1px solid var(--line);border-radius:6px;}
+.buyrow{padding:8px 2px;border-bottom:1px dashed var(--line);}
+.buyrow:last-child{border-bottom:none;}
+.buyhd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;}
+.buyhd b{color:var(--ink);font-size:13px;}
+.buyhd .waste{color:var(--faint);font-size:10px;}
+.buyitem{display:flex;gap:8px;font-size:11px;color:var(--dim);padding:1.5px 0 1.5px 12px;}
+.buyitem .bq{min-width:32px;text-align:right;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;}
 .btn{background:var(--accent);border:none;color:#1a1206;font-family:var(--mono);font-weight:600;font-size:12px;padding:8px 12px;border-radius:6px;cursor:pointer;width:100%;margin-top:10px;}
 .btn.ghost{background:var(--p2);color:var(--ink);border:1px solid var(--line);}
 .warnbox{background:rgba(224,122,95,.12);border:1px solid var(--bad);color:#f0b6a8;font-size:10.5px;border-radius:6px;padding:8px 10px;margin-top:10px;line-height:1.5;}
@@ -176,7 +197,7 @@ td .tag{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right
 <aside id="side">
   <!-- Version badge: this static text is replaced at runtime by initChangelog()
        with 'v'+APP_VERSION+' · EXPERIMENTAL'; clicking it opens the #changelog modal. -->
-  <h1>Timber<span class="accent">·</span>Framer <button id="verBadge" title="View changelog" style="font-family:var(--mono);font-size:10px;font-weight:600;color:#6cc08a;background:none;border:none;padding:0;letter-spacing:.5px;vertical-align:middle;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px;">v1.10 · STABLE</button></h1>
+  <h1>Timber<span class="accent">·</span>Framer <button id="verBadge" title="View changelog" style="font-family:var(--mono);font-size:10px;font-weight:600;color:#6cc08a;background:none;border:none;padding:0;letter-spacing:.5px;vertical-align:middle;cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px;">v1.11 · STABLE</button></h1>
   <div class="tagline">Lumber framing generator + shared cut list.</div>
   <div class="tagline" style="color:#ff8a3d;opacity:.85;margin-top:2px;">⚠ Built with AI. Heuristic, not engineered — verify everything against local code and a qualified professional before building.</div>
   <div class="sec" id="presetSec">
@@ -238,11 +259,15 @@ td .tag{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right
 <aside id="cut">
   <h2>Cut list &amp; rationale</h2>
   <div id="rationale"></div>
-  <div class="sec-hd">Members</div>
-  <table id="cutTable"><thead><tr><th>Member</th><th>Size</th><th class="num">Len</th><th class="num">Qty</th></tr></thead><tbody></tbody></table>
-  <div id="totals"></div>
-  <div class="sec-hd" style="margin-top:14px">Buy list (stock)</div>
-  <div class="buy" id="buy"></div>
+  <div class="sec-hd sec-toggle" title="click to collapse / expand"><span>Members<span class="sec-count" id="membersCount"></span></span></div>
+  <div class="sec-body" id="membersBody">
+    <table id="cutTable"><thead><tr><th>Member</th><th>Size</th><th class="num">Len</th><th class="num">Qty</th></tr></thead><tbody></tbody></table>
+    <div id="totals"></div>
+  </div>
+  <div class="sec-hd sec-toggle" title="click to collapse / expand"><span>Buy list (stock)<span class="sec-count" id="buyCount"></span></span></div>
+  <div class="sec-body" id="buyBody">
+    <div class="buy" id="buy"></div>
+  </div>
   <div id="warnbox"></div>
   <button class="btn" id="expCut">↧ Export cut list (.txt)</button>
   <button class="btn ghost" id="expCsv">↧ Export CSV</button>
@@ -285,7 +310,8 @@ const LUMBER = {
   '4x8':{t:3.5,w:7.25,nt:4,nw:8}, '4x10':{t:3.5,w:9.25,nt:4,nw:10}, '4x12':{t:3.5,w:11.25,nt:4,nw:12},   // solid headers (3.5" thick → fills a 2x4 wall)
   '6x6':{t:5.5,w:5.5,nt:6,nw:6},  '6x8':{t:5.5,w:7.25,nt:6,nw:8},  '6x10':{t:5.5,w:9.25,nt:6,nw:10}, '6x12':{t:5.5,w:11.25,nt:6,nw:12},  // solid headers for 2x6 walls (5.5" thick)
 };
-const STOCK = [96,120,144,192];          // purchasable board lengths: 8/10/12/16 ft in inches
+const STOCK = [92.625,96,120,144,192];   // purchasable lengths (in): 92⅝" pre-cut stud + 8/10/12/16 ft boards
+const PRECUT = 92.625;                    // the 92⅝" pre-cut stud — only spent on full-height studs (≥84"), not offcuts
 const KERF = 0.125;                       // saw-blade kerf (in) lost per cut, used by the bin-packer
 // Per-role display colour (0xRRGGBB) and human label, keyed by member.role. Used by
 // the 3D materials, the cut-list table tags, and the viewport legend.
@@ -1309,9 +1335,12 @@ function cutRows(){
     map.get(key).qty++; });
   return [...map.values()].sort((a,b)=> a.role.localeCompare(b.role)||b.len-a.len);
 }
+// stockLabel(s) — pretty-print a stock length for the buy list: the pre-cut stud vs N-ft boards.
+function stockLabel(s){ return Math.abs(s-PRECUT)<0.01 ? '92⅝" pre-cut' : (s/12)+'ft'; }
 // packStock(lengths) — first-fit-decreasing bin-pack a list of piece lengths into
 // STOCK boards (adding KERF per cut after the first), returning {boards, tooLong}
 // where tooLong = pieces exceeding the longest stock (flagged for splice/redesign).
+// The 92⅝" pre-cut stud is offered only to full-height studs (≥84"), so it isn't spent on short offcuts.
 function packStock(lengths){
   const pcs=lengths.slice().sort((a,b)=>b-a), boards=[], tooLong=[];
   const maxS=Math.max(...STOCK);
@@ -1319,7 +1348,7 @@ function packStock(lengths){
     if(p>maxS){ tooLong.push(p); continue; }
     let placed=false;
     for(const b of boards){ const need=(b.cuts.length?KERF:0)+p; if(b.used+need<=b.stock+1e-6){ b.used+=need; b.cuts.push(p); placed=true; break; } }
-    if(!placed){ const s=STOCK.filter(x=>x>=p).sort((a,b)=>a-b)[0]||maxS; boards.push({stock:s,used:p,cuts:[p]}); }
+    if(!placed){ const s=STOCK.filter(x=> x>=p && (Math.abs(x-PRECUT)>0.01 || p>=84)).sort((a,b)=>a-b)[0]||maxS; boards.push({stock:s,used:p,cuts:[p]}); }
   }
   return {boards,tooLong};
 }
@@ -1331,7 +1360,7 @@ function renderCut(){
   const tb=$('#cutTable tbody'); tb.innerHTML='';
   rows.forEach(r=>{ const tr=document.createElement('tr');
     tr.innerHTML=`<td><span class="tag" style="background:#${COLORS[r.role].toString(16).padStart(6,'0')}"></span>${ROLE_LABEL[r.role]}</td>
-      <td>${r.size}</td><td class="num">${ftin(r.len)}</td><td class="num">${r.qty}</td>`;
+      <td><span class="sztag">${r.size}</span></td><td class="num len">${ftin(r.len)}</td><td class="num qty">${r.qty}</td>`;
     tb.appendChild(tr); });
   // totals
   let bf=0, count=members.length;
@@ -1344,18 +1373,21 @@ function renderCut(){
     <div class="totline"><span>Hardware</span><b>${hw.join(', ')||'—'}</b></div>`;
   // buy list — pack per size
   const bySize={}; members.forEach(m=>{ if(m.sheet)return; (bySize[m.size]=bySize[m.size]||[]).push(m.len); });
-  const buy=$('#buy'); buy.innerHTML=''; let warn='';
+  const buy=$('#buy'); buy.innerHTML=''; let warn='', totalBoards=0;
   Object.keys(bySize).sort().forEach(sz=>{
-    const {boards,tooLong}=packStock(bySize[sz]);
+    const {boards,tooLong}=packStock(bySize[sz]); totalBoards+=boards.length;
     const byStock={}; boards.forEach(b=> byStock[b.stock]=(byStock[b.stock]||0)+1);
-    const parts=Object.keys(byStock).map(s=>`${byStock[s]}× ${(+s/12)}ft`).join(', ');
     const waste=boards.reduce((a,b)=>a+(b.stock-b.used),0);
-    const div=document.createElement('div'); div.className='b';
-    div.innerHTML=`<span><b style="color:var(--ink)">${sz}</b> — ${parts||'—'}</span><span style="color:var(--faint)">${waste.toFixed(0)}" waste</span>`;
+    const items=Object.keys(byStock).sort((a,b)=>a-b).map(s=>`<div class="buyitem"><span class="bq">${byStock[s]}×</span><span>${stockLabel(+s)}</span></div>`).join('');
+    const div=document.createElement('div'); div.className='buyrow';
+    div.innerHTML=`<div class="buyhd"><b>${sz}</b><span class="waste">${waste.toFixed(0)}" waste</span></div>${items||'<div class="buyitem">—</div>'}`;
     buy.appendChild(div);
     if(tooLong.length) warn+=`${sz}: ${tooLong.length} piece(s) exceed 16ft stock — splice or reduce span. `;
   });
   $('#warnbox').innerHTML = warn ? `<div class="warnbox">${warn}</div>` : '';
+  // summaries shown in the section headers when they're collapsed
+  const mc=$('#membersCount'); if(mc) mc.textContent=` · ${count} pcs`;
+  const bc=$('#buyCount'); if(bc) bc.textContent=` · ${totalBoards} boards`;
 }
 
 /* ===== rationale (load-path explanation shown above the cut list) ===== */
@@ -1386,6 +1418,8 @@ function syncUI(){
 $('#tEdges').addEventListener('click',()=>{ showEdges=!showEdges; $('#tEdges').classList.toggle('on',showEdges); render3D(); });
 $('#tGhost').addEventListener('click',()=>{ ghost=!ghost; $('#tGhost').classList.toggle('on',ghost); render3D(); });
 $('#tCut').addEventListener('click',()=>{ const h=$('#cut').classList.toggle('hidden'); $('#tCut').classList.toggle('on',!h); });
+// collapse / expand the Members and Buy-list sections by clicking their header
+$('#cut').addEventListener('click',e=>{ const h=e.target.closest('.sec-toggle'); if(h) h.classList.toggle('collapsed'); });
 $('#tReset').addEventListener('click',frame);
 // Find #N — highlight a piece by its number (un-hide if needed) and pop its inspector at viewport centre
 $('#tFind').addEventListener('change',e=>{ const n=parseInt(e.target.value,10);
@@ -1631,7 +1665,7 @@ $('#expCut').addEventListener('click',()=>{
   t+=`\nHardware: ${hw.join(', ')||'—'}\nTotal pieces: ${members.length}    Board feet: ${bf.toFixed(1)} bf\n\nBUY LIST (stock)\n`;
   const bySize={}; members.forEach(m=>{if(m.sheet)return; (bySize[m.size]=bySize[m.size]||[]).push(m.len);});
   Object.keys(bySize).sort().forEach(sz=>{ const {boards,tooLong}=packStock(bySize[sz]); const bs={}; boards.forEach(b=>bs[b.stock]=(bs[b.stock]||0)+1);
-    t+=`${sz}: ${Object.keys(bs).map(s=>bs[s]+'x '+(s/12)+'ft').join(', ')}${tooLong.length?'  (!'+tooLong.length+' over-length)':''}\n`; });
+    t+=`${sz}: ${Object.keys(bs).map(s=>bs[s]+'x '+stockLabel(+s)).join(', ')}${tooLong.length?'  (!'+tooLong.length+' over-length)':''}\n`; });
   t+=`\nHeuristic guidance only — not engineered. Verify load-bearing designs.\n`;
   dl('cut-list.txt',t);
 });
@@ -1739,6 +1773,11 @@ $('#presetFile').addEventListener('change', e=>{
 /* ===== in-app changelog (newest first; CHANGELOG[0].v is the app version) ===== */
 /* each note: {t:'feat'|'fix', text}.  feat = new feature, fix = bug/correctness fix */
 const CHANGELOG=[
+  {v:'1.11', date:'2026-06-29', notes:[
+    {t:'change', text:'Buy list now stocks 92⅝" PRE-CUT STUDS. Full-height studs (≥84") are drawn from the standard 92⅝" pre-cut instead of cutting down a 96" board — a real waste cut (e.g. ~142" / ~12 ft saved on a small gable shed, studs dropping from 4½" of drop each to 1⅛"). Short offcuts still come from regular 8/10/12/16 ft boards, so pre-cuts aren’t spent on blocking.'},
+    {t:'change', text:'Cut-list panel readability pass: clearer section breaks, the totals now sit in a summary box, the members table has size tags + bold quantities + zebra rows, and the buy list is grouped per size with each quantity × stock length aligned and bold (was a cramped comma-separated line).'},
+    {t:'feat', text:'Click the “Members” or “Buy list” header in the cut-list panel to collapse / expand that section (chevron shows the state) — scan a long buy list without scrolling past the whole members table, and vice-versa. A collapsed header shows a count summary (e.g. “Members · 183 pcs”, “Buy list · 90 boards”).'},
+  ]},
   {v:'1.10', date:'2026-06-29', notes:[
     {t:'feat', text:'Walls can be NAMED — type a name in the wall card’s header (defaults to “Wall N”). The name shows in every “Branch from” dropdown and in the piece inspector, so a big layout reads as rooms instead of numbers.'},
     {t:'feat', text:'“⊙” (face) button on each wall card swings the camera SQUARE-ON to that wall (elevation-style), so you edit it head-on.'},
